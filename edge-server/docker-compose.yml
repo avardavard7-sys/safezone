@@ -1,0 +1,29 @@
+services:
+  bridge:
+    build: ./bridge
+    container_name: safezone-bridge
+    restart: unless-stopped
+    env_file:
+      - ./bridge/.env
+    network_mode: host
+    volumes:
+      # Привязка к объекту: токен и учётка бриджа. Переживает пересборку —
+      # без этого тома после каждого --build пришлось бы привязывать заново.
+      - ./bridge/data:/app/data
+      # Запасные правила зон, если они ещё не нарисованы в панели:
+      #   docker compose restart bridge
+      - ./bridge/zones.json:/app/zones.json:ro
+
+  # Локальная VLM (Фаза 3): docker compose --profile localvlm up -d
+  ollama:
+    image: ollama/ollama:latest
+    container_name: safezone-vlm
+    restart: unless-stopped
+    profiles: ["localvlm"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+
+volumes:
+  ollama_models:

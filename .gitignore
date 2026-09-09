@@ -1,0 +1,29 @@
+node_modules/
+.next/
+.env.local
+.env*.local
+.vercel
+.DS_Store
+*.log
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Sentry
+.sentryclirc
+
+# IDE
+.idea/
+.vscode/
+
+# Build artifacts
+dist/
+build/
+out/
+
+# бридж: секреты и состояние привязки
+edge-server/bridge/.env
+edge-server/bridge/data/
+edge-server/bridge/node_modules/

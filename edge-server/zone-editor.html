@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>SafeZone — редактор зон</title>
+<style>
+  :root { --bg:#12100e; --panel:#1b1815; --line:#2e2a26; --accent:#FF4D00; --txt:#EDE7E0; --dim:#948C84; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#12100e; color:#EDE7E0; font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:18px 24px; border-bottom:1px solid #2e2a26; }
+  h1 { margin:0; font-size:19px; letter-spacing:.2px; }
+  .sub { color:#948C84; font-size:13px; margin-top:4px; }
+  main { display:grid; grid-template-columns: 1fr 380px; gap:20px; padding:20px 24px; align-items:start; }
+  #drop { border:2px dashed #3a342e; border-radius:10px; min-height:320px; display:flex; align-items:center;
+          justify-content:center; color:#948C84; text-align:center; padding:40px; cursor:pointer; }
+  #drop.over { border-color:#FF4D00; color:#EDE7E0; }
+  #stage { position:relative; display:none; }
+  canvas { max-width:100%; border-radius:10px; display:block; cursor:crosshair; }
+  aside { background:#1b1815; border:1px solid #2e2a26; border-radius:10px; padding:16px; position:sticky; top:20px; }
+  label { display:block; font-size:12px; color:#948C84; margin:12px 0 5px; text-transform:uppercase; letter-spacing:.6px; }
+  input, select { width:100%; padding:9px 11px; background:#12100e; border:1px solid #2e2a26; border-radius:7px; color:#EDE7E0; font-size:14px; }
+  button { padding:10px 14px; border:0; border-radius:7px; font-size:14px; cursor:pointer; font-weight:600; }
+  .primary { background:#FF4D00; color:#fff; width:100%; margin-top:14px; }
+  .ghost { background:#2a2521; color:#EDE7E0; }
+  .row { display:flex; gap:8px; margin-top:10px; }
+  .row button { flex:1; }
+  .hint { font-size:12.5px; color:#948C84; margin-top:12px; line-height:1.55; }
+  .warn { color:#FFB37A; }
+  ul.list { list-style:none; padding:0; margin:12px 0 0; }
+  ul.list li { padding:8px 10px; background:#12100e; border:1px solid #2e2a26; border-radius:7px;
+               margin-bottom:6px; font-size:13px; display:flex; justify-content:space-between; align-items:center; }
+  ul.list button { background:none; color:#948C84; padding:2px 6px; }
+  textarea { width:100%; height:190px; margin-top:12px; background:#12100e; color:#EDE7E0;
+             border:1px solid #2e2a26; border-radius:7px; padding:11px; font:12px/1.45 ui-monospace,Menlo,Consolas,monospace; }
+  .step { display:inline-block; width:20px; height:20px; line-height:20px; text-align:center; border-radius:50%;
+          background:#FF4D00; color:#fff; font-size:12px; font-weight:700; margin-right:7px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Редактор зон SafeZone</h1>
+  <div class="sub">Нарисуй зоны мышкой — получи готовый zones.json. Работает офлайн, ничего никуда не отправляет.</div>
+</header>
+
+<main>
+  <div>
+    <div id="drop">
+      <div>
+        <div style="font-size:34px;margin-bottom:10px">📷</div>
+        <b>Перетащи сюда кадр с камеры</b><br>
+        <span style="font-size:13px">или кликни и выбери файл · можно вставить из буфера (Ctrl+V)</span><br>
+        <span style="font-size:12.5px;margin-top:8px;display:block">Кадр берётся так: <code>docker exec safezone-bridge ls /tmp</code> или скриншот из VLC</span>
+      </div>
+    </div>
+    <input type="file" id="file" accept="image/*" hidden>
+    <div id="stage"><canvas id="cv"></canvas></div>
+    <div class="hint" id="status"></div>
+  </div>
+
+  <aside>
+    <label><span class="step">1</span>Название зоны</label>
+    <input id="zname" placeholder="Барная стойка · Стол 1">
+
+    <label><span class="step">2</span>Что за зона</label>
+    <select id="ztype">
+      <option value="guest_zone">Зона гостей (где сидит гость)</option>
+      <option value="staff_zone">Зона персонала (за стойкой)</option>
+      <option value="zone">Стол / общая зона</option>
+    </select>
+
+    <label>Имя камеры (как в админке)</label>
+    <input id="zcam" placeholder="тест" value="тест">
+
+    <label>Сколько секунд держать до тревоги</label>
+    <input id="zsec" type="number" value="300">
+
+    <div class="row">
+      <button class="ghost" id="undo">↶ Точку назад</button>
+      <button class="ghost" id="save">✓ Сохранить зону</button>
+    </div>
+
+    <ul class="list" id="list"></ul>
+
+    <button class="primary" id="gen">Собрать zones.json</button>
+    <textarea id="out" placeholder="Здесь появится JSON — скопируй его в bridge/zones.json"></textarea>
+    <button class="ghost" id="copy" style="width:100%;margin-top:8px">Скопировать</button>
+
+    <div class="hint">
+      <b>Как рисовать:</b> кликай по углам зоны (минимум 3 точки), потом «Сохранить зону».<br><br>
+      <b>Важно:</b> ставь точки по <b>полу</b>, а не по головам — система смотрит, где человек <b>стоит</b>.<br><br>
+      <span class="warn">Зоны не должны накладываться друг на друга</span> — иначе гость за столом посчитается ещё и гостем у стойки, и правила сработают крест-накрест.<br><br>
+      Для правила «бармена нет» нужны <b>две</b> зоны с одинаковым названием: гостей и персонала.
+    </div>
+  </aside>
+</main>
+
+<script>
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const drop = document.getElementById('drop'), stage = document.getElementById('stage');
+const fileInput = document.getElementById('file'), status = document.getElementById('status');
+let img = null, pts = [], zones = [];
+
+function loadImage(src) {
+  const im = new Image();
+  im.onload = () => {
+    img = im; cv.width = im.width; cv.height = im.height;
+    drop.style.display = 'none'; stage.style.display = 'block';
+    draw();
+    status.textContent = `Кадр ${im.width}×${im.height}. Кликай по углам зоны.`;
+  };
+  im.src = src;
+}
+function readFile(f) { const r = new FileReader(); r.onload = e => loadImage(e.target.result); r.readAsDataURL(f); }
+
+drop.onclick = () => fileInput.click();
+fileInput.onchange = e => e.target.files[0] && readFile(e.target.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); e.dataTransfer.files[0] && readFile(e.dataTransfer.files[0]); };
+window.addEventListener('paste', e => {
+  for (const it of e.clipboardData.items) if (it.type.startsWith('image/')) readFile(it.getAsFile());
+});
+
+const COLORS = { guest_zone:'#4EA8FF', staff_zone:'#FF4D00', zone:'#5BD66F' };
+
+function draw() {
+  if (!img) return;
+  ctx.drawImage(img, 0, 0);
+  for (const z of zones) poly(z.points, COLORS[z.type] || '#5BD66F', z.name, true);
+  poly(pts, '#FFD166', '', false);
+  for (const p of pts) {
+    ctx.fillStyle = '#FFD166';
+    ctx.beginPath(); ctx.arc(p.x * cv.width, p.y * cv.height, 6, 0, 7); ctx.fill();
+  }
+}
+function poly(points, color, label, closed) {
+  if (points.length < 2) return;
+  ctx.beginPath();
+  points.forEach((p, i) => { const x = p.x * cv.width, y = p.y * cv.height; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  if (closed) ctx.closePath();
+  ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
+  if (closed) { ctx.fillStyle = color + '33'; ctx.fill(); }
+  if (label) {
+    ctx.fillStyle = color; ctx.font = 'bold 20px sans-serif';
+    ctx.fillText(label, points[0].x * cv.width + 6, points[0].y * cv.height - 8);
+  }
+}
+
+cv.onclick = e => {
+  const r = cv.getBoundingClientRect();
+  pts.push({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height });
+  draw();
+  status.textContent = `Точек: ${pts.length}${pts.length >= 3 ? ' — можно сохранять' : ' (нужно минимум 3)'}`;
+};
+document.getElementById('undo').onclick = () => { pts.pop(); draw(); };
+
+document.getElementById('save').onclick = () => {
+  const name = document.getElementById('zname').value.trim();
+  if (pts.length < 3) return alert('Нужно минимум 3 точки');
+  if (!name) return alert('Впиши название зоны');
+  zones.push({
+    name, type: document.getElementById('ztype').value,
+    camera: document.getElementById('zcam').value.trim() || 'тест',
+    seconds: parseInt(document.getElementById('zsec').value) || 300,
+    points: pts.slice(),
+  });
+  pts = []; draw(); renderList();
+};
+
+function renderList() {
+  document.getElementById('list').innerHTML = zones.map((z, i) =>
+    `<li><span style="color:${COLORS[z.type]}">■</span> ${z.name} · ${z.type} · ${z.seconds}с
+     <button onclick="del(${i})">✕</button></li>`).join('');
+}
+window.del = i => { zones.splice(i, 1); draw(); renderList(); };
+
+document.getElementById('gen').onclick = () => {
+  const byName = {};
+  for (const z of zones) (byName[z.name] = byName[z.name] || []).push(z);
+  const rules = [];
+  for (const [name, list] of Object.entries(byName)) {
+    const guest = list.find(z => z.type === 'guest_zone');
+    const staff = list.find(z => z.type === 'staff_zone');
+    const plain = list.find(z => z.type === 'zone');
+    const id = name.toLowerCase().replace(/[^a-zа-я0-9]+/gi, '_').slice(0, 24);
+    const pack = z => z.points.map(p => [ +p.x.toFixed(4), +p.y.toFixed(4) ]);
+    if (guest && staff) {
+      rules.push({ id, name, camera: guest.camera, rule: 'no_staff',
+        guest_zone: pack(guest), staff_zone: pack(staff),
+        seconds: guest.seconds, repeat_sec: guest.seconds, severity: 'medium', enabled: true });
+    } else if (plain) {
+      rules.push({ id, name, camera: plain.camera, rule: 'uncleaned',
+        zone: pack(plain), seconds: plain.seconds, repeat_sec: plain.seconds, severity: 'low', enabled: true });
+    } else if (guest || staff) {
+      const z = guest || staff;
+      rules.push({ id, name, camera: z.camera, rule: 'empty_zone',
+        zone: pack(z), seconds: z.seconds, repeat_sec: z.seconds, severity: 'low', enabled: true,
+        _подсказка: 'для правила «сотрудника нет» добавь вторую зону с ТЕМ ЖЕ названием' });
+    }
+  }
+  document.getElementById('out').value = JSON.stringify({ rules }, null, 2);
+};
+document.getElementById('copy').onclick = () => {
+  const t = document.getElementById('out'); t.select(); document.execCommand('copy');
+  status.textContent = 'Скопировано — вставь в bridge/zones.json и перезапусти бридж';
+};
+</script>
+</body>
+</html>
