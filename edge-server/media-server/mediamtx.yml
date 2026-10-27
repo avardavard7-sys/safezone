@@ -1,0 +1,58 @@
+logLevel: info
+logDestinations: [stdout]
+
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+
+# Права решает бридж: зритель по WebRTC — только с токеном на свою камеру,
+# бридж по RTSP — только с этой машины, публикация запрещена всем.
+authMethod: http
+authHTTPAddress: http://127.0.0.1:8099/media/auth
+authHTTPExclude: []
+
+api: true
+apiAddress: 127.0.0.1:9997
+
+metrics: false
+pprof: false
+playback: false
+
+# RTSP-сервер нужен только бриджу на этой же машине — наружу не открываем
+rtsp: true
+rtspTransports: [tcp]
+rtspAddress: 127.0.0.1:8554
+rtspEncryption: "no"
+rtspAuthMethods: [basic]
+
+rtmp: false
+hls: false
+srt: false
+moq: false
+
+# WebRTC: сигнализация за Caddy (HTTPS), медиа напрямую на 8189
+webrtc: true
+webrtcAddress: 127.0.0.1:8889
+webrtcEncryption: false
+webrtcAllowOrigins: ["https://safezone.vercel.app"]
+webrtcTrustedProxies: ["127.0.0.1"]
+webrtcLocalUDPAddress: :8189
+# запасной путь для зрителей, у которых UDP закрыт корпоративным файрволом
+webrtcLocalTCPAddress: :8189
+webrtcIPsFromInterfaces: true
+webrtcIPsFromInterfacesList: []
+webrtcIPsFromInterfacesExcludeList: [wg0]
+webrtcAdditionalHosts: []
+webrtcICEServers2: []
+webrtcHandshakeTimeout: 10s
+webrtcTrackGatherTimeout: 2s
+
+pathDefaults:
+  source: publisher
+  sourceOnDemand: false
+  sourceOnDemandStartTimeout: 10s
+  sourceOnDemandCloseAfter: 15s
+  rtspTransport: tcp
+
+paths:
+  all_others:

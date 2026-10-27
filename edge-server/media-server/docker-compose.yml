@@ -1,0 +1,48 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.21.3
+    container_name: safezone-media
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    depends_on:
+      bridge:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2.8
+    container_name: safezone-https
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      MEDIA_DOMAIN: ${MEDIA_DOMAIN:?укажи MEDIA_DOMAIN в .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  bridge:
+    build: ../bridge
+    container_name: safezone-bridge
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./bridge.env
+    environment:
+      MEDIA_MODE: server
+      MEDIA_API: http://127.0.0.1:9997
+      MEDIA_RTSP: rtsp://127.0.0.1:8554
+      API_HOST: 127.0.0.1
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8099/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  caddy_data:
+  caddy_config:
