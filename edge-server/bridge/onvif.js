@@ -243,6 +243,7 @@ export function splitRtsp(url) {
  * '192.168.10.8.1-254' — несуществующим адресам, поэтому не находила ничего.
  */
 import { planTargets } from './discovery-plan.js';
+import { findWithoutOnvif } from './netscan.js';
 
 export function normalizeSubnet(input) {
   if (!input) return null;
@@ -300,7 +301,22 @@ export async function discoverCameras({ subnet, user = 'admin', pass = '', creds
     try { byHost.set(new URL(s).hostname, s); } catch {}
   }
 
-  return inspectDevices(byHost, logins, onLog);
+  const cameras = await inspectDevices(byHost, logins, onLog);
+
+  // камеры с выключенным ONVIF и регистраторы, которые отвечают только по RTSP
+  try {
+    const plan = planTargets({ asked: subnet, site: siteSubnets, serverMode, local: localSubnets() });
+    const done = new Set(cameras.filter(c => c.cred !== null).map(c => c.host));
+    const extra = await findWithoutOnvif({ targets: plan.targets, logins, skipHosts: done, onLog });
+    for (const cam of extra) {
+      const i = cameras.findIndex(c => c.host === cam.host);
+      if (i === -1) cameras.push(cam);
+      else if (cam.cred !== null) cameras[i] = cam;
+    }
+  } catch (e) {
+    onLog(`поиск без ONVIF не удался: ${e.message}`);
+  }
+  return cameras;
 }
 
 /**

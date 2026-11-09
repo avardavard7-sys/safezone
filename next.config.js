@@ -1,4 +1,4 @@
-const { withSentryConfig } = require('@sentry/nextjs');
+const { withSentryConfig } = require('@sentry/nextjs/config');
 
 const nextConfig = {
   typescript: { ignoreBuildErrors: true },
@@ -7,9 +7,6 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   productionBrowserSourceMaps: false,
-  experimental: {
-    instrumentationHook: true,
-  },
   // модели лиц и движок не меняются под тем же именем: браузер хранит их год
   // и не перекачивает 50 МБ при каждом открытии страницы
   async headers() {
@@ -26,8 +23,7 @@ const sentryWebpackPluginOptions = {
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
   authToken: process.env.SENTRY_AUTH_TOKEN,
-  hideSourceMaps: true,
-  disableLogger: true,
+  sourcemaps: { deleteSourcemapsAfterUpload: true },
 };
 
 module.exports = process.env.NEXT_PUBLIC_SENTRY_DSN

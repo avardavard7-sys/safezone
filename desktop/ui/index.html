@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>SafeZone Bridge</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<style>
+:root{--bg:#0A1330;--card:#131E45;--line:#263468;--ink:#FFFFFF;--muted:#A9B8DE;--sky:#8EC9FF;--mint:#7FD8AE;--coral:#F0714B;--amber:#F5B942}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:radial-gradient(circle at 85% 0%,#1C2D70,var(--bg) 60%);color:var(--ink);font:15px/1.45 "Segoe UI",system-ui,Arial,sans-serif;display:flex;flex-direction:column}
+header{display:flex;align-items:center;justify-content:space-between;padding:20px 28px;border-bottom:1px solid var(--line)}
+.brand{font-size:20px;font-weight:800;letter-spacing:.3px}.brand span{color:var(--sky)}
+.pill{padding:6px 14px;border-radius:999px;font-weight:700;font-size:13px;background:#ffffff1a;color:var(--muted)}
+.pill.ok{background:#7fd8ae2e;color:var(--mint)}.pill.bad{background:#f0714b33;color:#ffc2ae}.pill.wait{background:#f5b94233;color:var(--amber)}
+main{flex:1;display:flex;align-items:center;justify-content:center;padding:28px;overflow:auto}
+.screen{display:none;width:100%;max-width:900px}.screen.on{display:block}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:28px}
+h1{font-size:26px;margin:0 0 8px}p{margin:0;color:var(--muted)}
+ol{margin:18px 0 22px;padding-left:20px;color:var(--muted)}ol b{color:var(--ink)}
+.code{width:100%;font:800 34px/1 Consolas,monospace;letter-spacing:10px;text-align:center;text-transform:uppercase;padding:18px;border-radius:14px;border:2px solid var(--line);background:#0a1330;color:var(--ink);outline:none}
+.code:focus{border-color:var(--sky)}
+button{font:700 15px "Segoe UI",system-ui,sans-serif;padding:13px 22px;border-radius:12px;border:0;cursor:pointer;background:var(--sky);color:#0A1330}
+button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:12px;margin-top:18px;align-items:center}.err{color:#ffc2ae;font-weight:600;min-height:22px;margin-top:12px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px}
+.stat small{color:var(--muted);display:block;margin-bottom:6px}.stat b{font-size:22px}
+.log{background:#070d24;border:1px solid var(--line);border-radius:14px;padding:14px;height:190px;overflow:auto;font:12.5px/1.5 Consolas,monospace;color:#c9d6f5;white-space:pre-wrap;word-break:break-word}
+.center{text-align:center}.big{font-size:64px;line-height:1;margin-bottom:14px}
+.spin{width:44px;height:44px;border:4px solid var(--line);border-top-color:var(--sky);border-radius:50%;margin:0 auto 18px;animation:s 1s linear infinite}@keyframes s{to{transform:rotate(360deg)}}
+</style></head><body>
+<header><div class="brand">Safe<span>Zone</span> Bridge</div><div id="pill" class="pill">запуск</div></header>
+<main>
+<section id="s-starting" class="screen"><div class="card center"><div class="spin"></div><h1>Запускаю…</h1><p>Подключаюсь к платформе и камерам</p></div></section>
+<section id="s-unpaired" class="screen"><div class="card">
+<h1>Привязка к объекту</h1><p>Введите код, чтобы подключить этот компьютер к вашему объекту</p>
+<ol><li>Откройте панель SafeZone: <b>Бридж → «Добавить бридж»</b></li><li>Скопируйте код из 8 символов и введите его ниже</li></ol>
+<input id="code" class="code" maxlength="8" placeholder="········" autocomplete="off" spellcheck="false">
+<div id="err" class="err"></div>
+<div class="row"><button id="pairBtn">Привязать</button><p>Код действует 24 часа</p></div></div></section>
+<section id="s-running" class="screen">
+<div class="grid">
+<div class="stat"><small>Связь с облаком</small><b id="v-link">…</b></div>
+<div class="stat"><small>Камеры</small><b id="v-cams">…</b></div>
+<div class="stat"><small>Доступ</small><b id="v-access">…</b></div>
+<div class="stat"><small>Версия</small><b id="v-ver">…</b></div>
+</div>
+<div class="log" id="log"></div>
+<div class="row"><button id="dashBtn">Открыть дашборд</button><button id="unpairBtn" class="ghost">Отвязать от объекта</button><p id="hint"></p></div></section>
+<section id="s-blocked" class="screen"><div class="card center"><div class="big">🔒</div><h1 id="b-title">Доступ приостановлен</h1><p id="b-text">Обратитесь к поставщику</p>
+<div class="row" style="justify-content:center"><button id="dashBtn2" class="ghost">Открыть дашборд</button></div></div></section>
+<section id="s-stopped" class="screen"><div class="card center"><div class="big">⚠️</div><h1>Программа остановлена</h1><p id="st-text"></p></div></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const fmtDate = (ms) => new Date(ms).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+function render(s) {
+  const phase = s.phase === 'pairing' ? 'starting' : s.phase;
+  for (const el of document.querySelectorAll('.screen')) el.classList.toggle('on', el.id === 's-' + phase);
+  const pill = $('pill'); const h = s.health || {}; const acc = h.access || null;
+  const labels = { starting: ['запуск', 'wait'], pairing: ['привязка', 'wait'], unpaired: ['не привязан', ''], running: [s.online ? 'работает' : 'запуск', s.online ? 'ok' : 'wait'], blocked: ['доступ закрыт', 'bad'], stopped: ['остановлен', 'bad'] };
+  const [text, cls] = labels[s.phase] || [s.phase, '']; pill.textContent = text; pill.className = 'pill ' + cls;
+  $('err').textContent = s.error || '';
+  $('pairBtn').disabled = s.phase === 'pairing';
+  if (phase === 'running') {
+    const offline = acc && acc.state === 'offline_grace';
+    $('v-link').textContent = offline ? 'нет связи' : (s.online ? 'на связи' : '…');
+    $('v-link').style.color = offline ? 'var(--amber)' : 'var(--mint)';
+    $('v-cams').textContent = h.cameras ?? '…';
+    $('v-access').textContent = acc && acc.until ? 'до ' + fmtDate(acc.until) : 'активен';
+    $('v-ver').textContent = h.version || '…';
+    $('hint').textContent = acc && acc.maxCameras != null ? 'Лимит камер: ' + acc.maxCameras : '';
+    const log = $('log'); const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+    log.textContent = (s.logs || []).slice(-80).join('\n'); if (stick) log.scrollTop = log.scrollHeight;
+  }
+  if (phase === 'blocked' && acc) {
+    $('b-title').textContent = { paused: 'Доступ приостановлен', expired: 'Срок доступа истёк', revoked: 'Доступ отозван', offline_stopped: 'Нет связи с облаком' }[acc.state] || 'Доступ закрыт';
+    $('b-text').textContent = acc.message || 'Обратитесь к поставщику';
+  }
+  if (phase === 'stopped') $('st-text').textContent = s.error || '';
+}
+$('pairBtn').onclick = () => window.bridgeApp.pair($('code').value);
+$('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pairBtn').click(); });
+$('dashBtn').onclick = $('dashBtn2').onclick = () => window.bridgeApp.openDashboard();
+$('unpairBtn').onclick = () => { if (confirm('Отвязать этот компьютер от объекта? Анализ камер остановится.')) window.bridgeApp.unpair(); };
+window.bridgeApp.onState(render);
+window.bridgeApp.getState().then(render);
+</script></body></html>

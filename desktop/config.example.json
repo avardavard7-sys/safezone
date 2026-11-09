@@ -1,0 +1,6 @@
+{
+  "supabaseUrl": "https://ВАШ-ПРОЕКТ.supabase.co",
+  "supabaseAnonKey": "публичный anon-ключ проекта",
+  "dashboardUrl": "https://safezone-gamma.vercel.app",
+  "apiPort": 8099
+}

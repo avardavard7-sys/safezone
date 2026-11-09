@@ -10,8 +10,8 @@
 /** Описание всех настроек: тип, дефолт, нужен ли перезапуск, для UI панели */
 export const SCHEMA = {
   // ── Детектор (перезапуск: модели грузятся при старте) ──
-  DETECTOR:            { type: 'enum', values: ['yolox_s','yolox_nano','yolox_m','yolox_l','yolov8n'], def: 'yolox_s', restart: true,  group: 'Детектор', label: 'Модель детектора' },
-  POSE_MODEL:          { type: 'enum', values: ['rtmo_m','yolov8n-pose'], def: 'rtmo_m',               restart: true,  group: 'Детектор', label: 'Модель скелетов' },
+  DETECTOR:            { type: 'enum', values: ['yolox_s','yolox_nano','yolox_m','yolox_l'], def: 'yolox_s', restart: true,  group: 'Детектор', label: 'Модель детектора' },
+  POSE_MODEL:          { type: 'enum', values: ['rtmo_m'], def: 'rtmo_m',               restart: true,  group: 'Детектор', label: 'Модель скелетов' },
   YOLO_ENABLED:        { type: 'bool', def: true,  restart: false, group: 'Детектор', label: 'Локальный фильтр YOLO', hint: 'Выключить = каждый кадр уходит в облако. Дорого!' },
   MOTION_ENABLED:      { type: 'bool', def: true,  restart: false, group: 'Детектор', label: 'Детектор движения' },
   MOTION_THRESHOLD:    { type: 'num',  def: 0.4, min: 0.05, max: 5, step: 0.05, restart: false, group: 'Детектор', label: 'Порог движения, %' },
@@ -40,6 +40,8 @@ export const SCHEMA = {
 
   // ── Приватность и режим ──
   LOCAL_ONLY:        { type: 'bool', def: false, restart: false, group: 'Приватность', label: 'Только локально (без облака)', hint: 'Кадры НЕ покидают объект. Нужна локальная VLM, иначе описания сцен не будет' },
+  CAMERA_GUARD:      { type: 'bool', def: true, restart: false, group: 'Детектор', label: 'Контроль сдвига камеры', hint: 'Сообщает, если камеру сдвинули, перевесили или закрыли: зоны и линии привязаны к её виду' },
+  FACES_ENABLED:     { type: 'bool', def: false, restart: false, group: 'Приватность', label: 'Чёрный список по лицам', hint: 'Обработка биометрии посетителей. Включайте только после оформления согласия и табличек о видеонаблюдении на входе' },
   AFTER_HOURS_START: { type: 'time', def: '22:00', restart: false, group: 'Приватность', label: 'Ночной режим с' },
   AFTER_HOURS_END:   { type: 'time', def: '06:00', restart: false, group: 'Приватность', label: 'Ночной режим до' },
 };

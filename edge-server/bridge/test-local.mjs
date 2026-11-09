@@ -372,7 +372,7 @@ const h = await (await fetch(`${B}/health`)).json();
 check('health: отвечает, версия и статус', h.ok && h.version==='v7.6-test' && h.detector==='yolox_s');
 
 // CORS — критично, иначе браузер заблокирует запрос из админки
-const pre = await fetch(`${B}/health`, { method:'OPTIONS', headers:{Origin:'https://safezone.vercel.app'} });
+const pre = await fetch(`${B}/health`, { method:'OPTIONS', headers:{Origin:'https://safezone-gamma.vercel.app'} });
 check('CORS: preflight 204 + разрешение источника',
   pre.status===204 && !!pre.headers.get('access-control-allow-origin'));
 check('CORS: POST разрешён', /POST/.test(pre.headers.get('access-control-allow-methods')||''));
@@ -762,8 +762,8 @@ try {
 
   // реальный: люди ~62px на кадре 2304px — полный кадр слеп, тайлы видят
   const { execSync } = await import('child_process');
-  execSync('curl -sL --max-time 20 -o /tmp/sz_zid.jpg https://raw.githubusercontent.com/ultralytics/ultralytics/main/ultralytics/assets/zidane.jpg');
-  const zid = await readFile('/tmp/sz_zid.jpg');
+  const { twoPeople } = await import('./test-assets/images.mjs');
+  const zid = twoPeople();
   const small = await sharp(zid).resize(110).jpeg().toBuffer();
   const canvas = await sharp({ create:{ width:2304, height:1296, channels:3, background:{r:88,g:95,b:90} } })
     .composite([{ input: small, left: 1950, top: 1000 }]).jpeg().toBuffer();
@@ -837,12 +837,13 @@ if (buffers.length === 8 && timestamps[1]-timestamps[0] === 250) check('извл
 
 } catch (e) { check('извлечение burst-серии (' + e.message + ')', false); }
 
-section('ДЕТЕКТОР + СКЕЛЕТЫ на реальном фото (нужен интернет для тестового фото)');
+section('ДЕТЕКТОР + СКЕЛЕТЫ на реальном фото (три человека, общественное достояние)');
 try {
-  execSync('curl -sL --max-time 20 -o /tmp/sz_test.jpg https://raw.githubusercontent.com/ultralytics/ultralytics/main/ultralytics/assets/bus.jpg');
-  const buf = await readFile('/tmp/sz_test.jpg');
-  const { detect } = await import('./yolo.js');
-  const { poseDetect } = await import('./pose.js');
+  const { crowd } = await import('./test-assets/images.mjs');
+  const buf = await crowd();
+  const { createYolox } = await import('./yolox.js');
+  const yxTest = createYolox('yolox_s.onnx', 640); await yxTest.init(); const detect = yxTest.detect;
+  const { rtmoDetect: poseDetect, rtmoInit: poseInitTest } = await import('./rtmo.js'); await poseInitTest();
   const t0 = Date.now();
   const dets = await detect(buf);
   const tDet = Date.now() - t0;
@@ -869,15 +870,15 @@ section('RTMO (Apache-позы) на реальном фото');
 try {
   const { existsSync } = await import('fs');
   if (existsSync('./rtmo_m.onnx')) {
-    const buf = await readFile('/tmp/sz_test.jpg');
+    const { crowd } = await import('./test-assets/images.mjs');
+    const buf = await crowd();
     const { rtmoDetect } = await import('./rtmo.js');
     const t0 = Date.now();
     const { persons } = await rtmoDetect(buf);
     console.log(`  rtmo_m ${Date.now() - t0}ms: ${persons.length} чел (conf: ${persons.map(p => (p.conf * 100) | 0 + '').join(',')})`);
-    check('rtmo нашёл людей (включая перекрытых)', persons.length >= 4);
-    const p0 = persons[0];
-    const nose = p0.kpts[0], hips = p0.kpts[11];
-    check('rtmo санити скелета (нос выше бёдер)', nose.c > 0.3 && hips.c > 0.3 && nose.y < hips.y);
+    check('rtmo нашёл всех троих в кадре', persons.length === 3);
+    check('rtmo санити скелета (нос выше плеч у каждого)', persons.every(p => p.kpts[0].c > 0.5 && p.kpts[5].c > 0.5 && p.kpts[6].c > 0.5 && p.kpts[0].y < p.kpts[5].y && p.kpts[0].y < p.kpts[6].y));
+    check('rtmo не выдумывает бёдра за краем кадра', persons.every(p => p.kpts[11].c < 0.3 && p.kpts[12].c < 0.3));
   } else console.log('  rtmo_m.onnx нет — пропуск');
 } catch (e) { check('rtmo (' + e.message + ')', false); }
 
@@ -948,8 +949,10 @@ section('LOCAL_ONLY: статические гарантии (код index.js)')
 {
   const idx = await readFile('./index.js', 'utf8');
   const guardPos = idx.indexOf('RT.LOCAL_ONLY && !result');
-  const cloudPos = idx.indexOf('if (OPENROUTER_API_KEY)');
+  const cloudPos = idx.indexOf('if (!result && OPENROUTER_API_KEY)');
+  const platformPos = idx.indexOf('platformVision({ url: PLATFORM_VISION_URL');
   check('страховка LOCAL_ONLY стоит ДО облачных ярусов', guardPos > 0 && cloudPos > 0 && guardPos < cloudPos);
+  check('страховка LOCAL_ONLY стоит ДО обращения к платформе', platformPos > 0 && guardPos < platformPos);
   check('premium-перепроверка OpenAI выключена в LOCAL_ONLY', idx.includes('OPENAI_API_KEY && !RT.LOCAL_ONLY'));
   // булев не должен сравниваться со строкой — на этом уже обжигались (кадры уходили в облако)
   check('LOCAL_ONLY нигде не сравнивается со строкой', !/RT\.LOCAL_ONLY\s*[!=]==\s*'/.test(idx));

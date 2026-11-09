@@ -34,7 +34,7 @@ moq: false
 webrtc: true
 webrtcAddress: 127.0.0.1:8889
 webrtcEncryption: false
-webrtcAllowOrigins: ["https://safezone.vercel.app"]
+webrtcAllowOrigins: ["https://safezone-gamma.vercel.app"]
 webrtcTrustedProxies: ["127.0.0.1"]
 webrtcLocalUDPAddress: :8189
 # запасной путь для зрителей, у которых UDP закрыт корпоративным файрволом

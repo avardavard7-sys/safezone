@@ -27,7 +27,7 @@ export function middleware(req: NextRequest) {
     // Локальный бридж на машине оператора: кнопки «Найти камеры», «Проверить»
     // и вкладка «Функции» ходят на него. Без этих источников браузер молча
     // режет запрос по CSP, и кнопки выглядят сломанными без ошибки в UI.
-    `connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.openai.com https://*.ingest.sentry.io https://api.telegram.org http://127.0.0.1:8099 http://localhost:8099${media ? ' ' + media : ''}`,
+    `connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.openai.com https://*.ingest.sentry.io https://api.telegram.org http://127.0.0.1:8099 http://localhost:8099 http://127.0.0.1:8889${media ? ' ' + media : ''}`,
     "font-src 'self' data:",
     "frame-ancestors 'self'",
   ].join('; ');

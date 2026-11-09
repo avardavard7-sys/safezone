@@ -21,6 +21,8 @@ type Bridge = {
   pairing_code: string | null; code_expires: string | null;
   last_seen_at: string | null; version: string | null; platform: string | null;
   stats: any; paired_at: string | null; created_at: string;
+  access_state?: 'active' | 'paused' | 'revoked'; access_until?: string | null;
+  max_cameras?: number | null; access_message?: string | null;
 };
 
 export default function BridgePage() {
@@ -67,6 +69,13 @@ export default function BridgePage() {
     const { error } = await sb.from('bridges').delete().eq('id', id);
     if (error) toast.error(error.message);
     else { toast.success('Бридж отвязан'); load(); }
+  }
+
+  async function saveAccess(id: string, patch: Partial<Bridge>) {
+    const sb = createClient();
+    const { error } = await sb.from('bridges').update(patch).eq('id', id);
+    if (error) toast.error(`Доступ не сохранён: ${error.message}`);
+    else { toast.success('Доступ обновлён: бридж получит его при следующей связи'); load(); }
   }
 
   function copy(text: string) {
@@ -119,7 +128,7 @@ export default function BridgePage() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {list.map(b => <BridgeCard key={b.id} b={b} onCopy={copy} onRemove={remove} />)}
+          {list.map(b => <BridgeCard key={b.id} b={b} onCopy={copy} onRemove={remove} onAccess={saveAccess} />)}
         </div>
       )}
 
@@ -141,7 +150,7 @@ export default function BridgePage() {
   );
 }
 
-function BridgeCard({ b, onCopy, onRemove }: any) {
+function BridgeCard({ b, onCopy, onRemove, onAccess }: any) {
   const s = b.stats || {};
   const seen = b.last_seen_at ? new Date(b.last_seen_at) : null;
   const ago = seen ? Math.round((Date.now() - seen.getTime()) / 1000) : null;
@@ -195,6 +204,7 @@ function BridgeCard({ b, onCopy, onRemove }: any) {
           <Trash2 className="w-4 h-4" />
         </button>
       </div>
+      {!b.pairing_code && onAccess && <AccessPanel b={b} onSave={(patch: any) => onAccess(b.id, patch)} />}
     </Card>
   );
 }
@@ -205,6 +215,56 @@ function Stat({ label, value, tone }: any) {
     <div className="glass-card p-4">
       <p className="text-sm text-slate-400">{label}</p>
       <p className={`text-2xl font-bold font-display ${c[tone]}`}>{value}</p>
+    </div>
+  );
+}
+
+function AccessPanel({ b, onSave }: any) {
+  const state = b.access_state || 'active';
+  const [until, setUntil] = useState(b.access_until ? String(b.access_until).slice(0, 10) : '');
+  const [maxCams, setMaxCams] = useState(b.max_cameras ?? '');
+  const [message, setMessage] = useState(b.access_message || '');
+  const expired = b.access_until && new Date(b.access_until).getTime() < Date.now();
+  const label = state === 'paused' ? 'приостановлен' : state === 'revoked' ? 'отозван' : expired ? 'срок истёк' : 'активен';
+  const tone = state === 'active' && !expired ? 'text-success' : 'text-danger';
+
+  function save(extra: any = {}) {
+    const n = String(maxCams).trim() === '' ? null : Math.max(0, parseInt(String(maxCams), 10) || 0);
+    onSave({
+      access_until: until ? new Date(`${until}T23:59:59`).toISOString() : null,
+      max_cameras: n,
+      access_message: message.trim() || null,
+      ...extra,
+    });
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-white/10 space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-sm text-slate-400">Доступ клиента: <span className={`font-medium ${tone}`}>{label}</span></p>
+        <div className="flex gap-2">
+          {state === 'active'
+            ? <Button size="sm" variant="ghost" onClick={() => save({ access_state: 'paused' })}>Приостановить</Button>
+            : <Button size="sm" onClick={() => save({ access_state: 'active' })}>Возобновить</Button>}
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="text-xs text-slate-400 space-y-1">
+          <span>Доступ до</span>
+          <input type="date" value={until} onChange={e => setUntil(e.target.value)} className="w-full bg-surface-200 rounded-lg px-3 py-2 text-sm text-white" />
+        </label>
+        <label className="text-xs text-slate-400 space-y-1">
+          <span>Лимит камер</span>
+          <input type="number" min={0} value={maxCams} placeholder="без лимита" onChange={e => setMaxCams(e.target.value)} className="w-full bg-surface-200 rounded-lg px-3 py-2 text-sm text-white" />
+        </label>
+        <label className="text-xs text-slate-400 space-y-1">
+          <span>Сообщение клиенту</span>
+          <input type="text" maxLength={200} value={message} placeholder="Обратитесь к поставщику" onChange={e => setMessage(e.target.value)} className="w-full bg-surface-200 rounded-lg px-3 py-2 text-sm text-white" />
+        </label>
+      </div>
+      <div className="flex justify-end">
+        <Button size="sm" variant="ghost" onClick={() => save()}>Сохранить срок и лимит</Button>
+      </div>
     </div>
   );
 }

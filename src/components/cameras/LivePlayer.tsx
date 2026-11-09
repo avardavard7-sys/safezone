@@ -24,7 +24,34 @@ class HttpError extends Error {
   constructor(public status: number) { super(`HTTP ${status}`); }
 }
 
+const LOCAL_BRIDGE = 'http://127.0.0.1:8099';
+let localRetryAt = 0;
+
+// Внутри приложения SafeZone Bridge видео берётся прямо с этого компьютера:
+// без задержки и без нагрузки на интернет. В обычном браузере локальный адрес не трогаем.
+async function requestLocalSession(cameraId: string): Promise<Session | null> {
+  if (typeof navigator === 'undefined' || !navigator.userAgent.includes('SafeZoneBridge')) return null;
+  if (Date.now() < localRetryAt) return null;
+  try {
+    const res = await fetch(`${LOCAL_BRIDGE}/live/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera_id: cameraId }),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(1500),
+    });
+    if (res.ok) return (await res.json()) as Session;
+    if (res.status === 503) localRetryAt = Date.now() + 60_000;
+    return null;
+  } catch {
+    localRetryAt = Date.now() + 15_000;
+    return null;
+  }
+}
+
 async function requestSession(cameraId: string): Promise<Session> {
+  const local = await requestLocalSession(cameraId);
+  if (local) return local;
   const { data } = await createClient().auth.getSession();
   const access = data.session?.access_token;
   if (!access) throw new HttpError(401);

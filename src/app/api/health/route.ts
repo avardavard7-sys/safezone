@@ -24,7 +24,7 @@ export async function GET(req: Request) {
   const sbStart = Date.now();
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     if (!supabaseUrl || !key) throw new Error('Supabase env not set');
     const sb = createClient(supabaseUrl, key, { auth: { persistSession: false } });
     // Под anon-ключом RLS вернёт 0 строк — это НОРМА, а не поломка.
@@ -34,10 +34,9 @@ export async function GET(req: Request) {
     checks.supabase = {
       ok: true,
       latency_ms: Date.now() - sbStart,
-      mode: process.env.SUPABASE_SERVICE_KEY ? 'service' : 'anon (RLS активен, строки скрыты — это ожидаемо)',
     };
   } catch (e: any) {
-    checks.supabase = { ok: false, error: e.message };
+    checks.supabase = { ok: false, error: 'нет связи с базой' };
   }
 
   checks.openai = process.env.OPENAI_API_KEY

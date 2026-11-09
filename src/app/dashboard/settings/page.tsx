@@ -62,9 +62,10 @@ export default function SettingsPage() {
     }
     setLoading(true);
     try {
+      const { data: { session } } = await createClient().auth.getSession();
       const res = await fetch('/api/notifications/telegram', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
         body: JSON.stringify({
           bot_token: tg.bot_token,
           chat_id: tg.chat_id,

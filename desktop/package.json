@@ -1,0 +1,28 @@
+{
+  "name": "safezone-bridge-app",
+  "productName": "SafeZone Bridge",
+  "version": "1.0.0",
+  "description": "SafeZone Bridge: подключает камеры объекта к платформе",
+  "author": "Mila Chess IT",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "kz.milachess.safezone.bridge",
+    "productName": "SafeZone Bridge",
+    "files": ["main.js", "media.js", "preload.js", "ui/**", "config.json"],
+    "extraResources": [
+      { "from": "../edge-server/bridge", "to": "bridge", "filter": ["**/*", "!test-*.mjs", "!bench-models.mjs", "!Dockerfile", "!data/**", "!.env*", "!*.ps1", "!*.sh"] },
+      { "from": "vendor/ffmpeg", "to": "ffmpeg" },
+      { "from": "vendor/mediamtx", "to": "mediamtx" }
+    ],
+    "win": { "target": "nsis" },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": false, "createDesktopShortcut": true, "shortcutName": "SafeZone Bridge" }
+  }
+}

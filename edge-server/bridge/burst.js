@@ -5,6 +5,7 @@
 
 import { spawn } from 'child_process';
 import { readFile, unlink, readdir } from 'fs/promises';
+import { FFMPEG, CAMERA_PROTOCOLS, redactSecrets } from './safety.js';
 
 /**
  * @param {string} inputUrl  rtsp://... (или путь к файлу — для тестов)
@@ -20,18 +21,21 @@ export function grabBurst(inputUrl, cameraId, opts = {}) {
   const pattern = `/tmp/burst_${cameraId}_${stamp}_%02d.jpg`;
   const prefix = `burst_${cameraId}_${stamp}_`;
 
+  if (!/^rtsps?:\/\//i.test(String(inputUrl)) && /^[a-z][\w+.-]*:/i.test(String(inputUrl)) && !/^[a-z]:[\\/]/i.test(String(inputUrl))) {
+    return Promise.reject(new Error('серия кадров: допустим только адрес камеры rtsp://'));
+  }
   return new Promise((resolve, reject) => {
     const isRtsp = inputUrl.startsWith('rtsp://');
     const args = [
       ...(isRtsp ? ['-rtsp_transport', 'tcp'] : []),
-      '-i', inputUrl,
+      ...(/^rtsps?:\/\//i.test(inputUrl) ? ['-protocol_whitelist', CAMERA_PROTOCOLS] : []), '-i', inputUrl,
       '-vf', `fps=${fps}`,
       '-frames:v', String(frames),
       '-q:v', '5',
       '-y', pattern,
     ];
     const t0 = Date.now();
-    const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const ff = spawn(FFMPEG, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
     ff.stderr.on('data', c => { stderr += c.toString(); });
     const timer = setTimeout(() => { ff.kill('SIGKILL'); }, timeoutMs);
@@ -44,7 +48,7 @@ export function grabBurst(inputUrl, cameraId, opts = {}) {
           .sort();
         if (files.length < 2) {
           for (const f of files) await unlink('/tmp/' + f).catch(() => {});
-          return reject(new Error(`burst: получено ${files.length} кадров: ${stderr.split('\n').slice(-3).join(' ').slice(-180)}`));
+          return reject(new Error(`burst: получено ${files.length} кадров: ${redactSecrets(stderr.split('\n').slice(-3).join(' ').slice(-180))}`));
         }
         const buffers = [];
         for (const f of files) {

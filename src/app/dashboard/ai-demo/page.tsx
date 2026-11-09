@@ -8,6 +8,7 @@ import { SeverityBadge } from '@/components/ui/Badge';
 import { Play, Square, Webcam as WebcamIcon, Brain, AlertTriangle, Settings, CheckCircle, Users } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/store/auth';
+import { createClient } from '@/lib/supabase/client';
 
 export default function AIDemoPage() {
   const { mall } = useAuth();
@@ -76,7 +77,7 @@ export default function AIDemoPage() {
     try {
       const res = await fetch('/api/ai/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${(await createClient().auth.getSession()).data.session?.access_token ?? ''}` },
         body: JSON.stringify({
           image: base64,
           camera_name: 'Вебкамера (AI Тест)',

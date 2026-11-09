@@ -12,8 +12,9 @@
 import { createServer } from 'http';
 import { discoverCameras } from './onvif.js';
 import { authorize } from './media.js';
+import { isCameraUrl, redactSecrets } from './safety.js';
 
-const ALLOWED_ORIGINS = (process.env.PANEL_ORIGINS || 'https://safezone.vercel.app,http://localhost:3000')
+const ALLOWED_ORIGINS = (process.env.PANEL_ORIGINS || 'https://safezone-gamma.vercel.app')
   .split(',').map(s => s.trim()).filter(Boolean);
 
 function cors(res, origin) {
@@ -21,8 +22,28 @@ function cors(res, origin) {
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Private-Network', 'true');
   res.setHeader('Access-Control-Max-Age', '86400');
+}
+
+/**
+ * Порт слушает только этот компьютер, но любой открытый в браузере сайт может
+ * постучаться на 127.0.0.1. Поэтому: чужой Host — подмена DNS, чужой Origin — чужой сайт,
+ * поиск и проверка камеры без JSON — попытка обойти проверку браузера.
+ */
+export function guard(req, port, allowed = ALLOWED_ORIGINS) {
+  const host = String(req.headers.host || '').toLowerCase();
+  const okHosts = [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
+  if (!okHosts.includes(host)) return { code: 403, error: 'неверный адрес запроса' };
+  const origin = req.headers.origin;
+  if (origin && !allowed.includes(origin)) return { code: 403, error: 'запрос с чужого сайта отклонён' };
+  const path = String(req.url || '').split('?')[0];
+  if (req.method === 'POST' && (path === '/discover' || path === '/probe' || path === '/live/session')) {
+    const ct = String(req.headers['content-type'] || '').toLowerCase();
+    if (!ct.startsWith('application/json')) return { code: 415, error: 'нужен Content-Type: application/json' };
+  }
+  return null;
 }
 
 function json(res, code, obj) {
@@ -52,6 +73,8 @@ export function startApi(deps, opts = {}) {
   let discovering = false; // защита от двойного нажатия: скан тяжёлый
 
   const srv = createServer(async (req, res) => {
+    const denied = guard(req, port);
+    if (denied) return json(res, denied.code, { ok: false, error: denied.error });
     cors(res, req.headers.origin);
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
@@ -68,6 +91,14 @@ export function startApi(deps, opts = {}) {
         }
         res.writeHead(verdict.allow ? 200 : 401);
         return res.end();
+      }
+
+      // ── живое видео с этого компьютера ──
+      if (url.pathname === '/live/session' && req.method === 'POST') {
+        const b = await readJson(req, 4096);
+        const out = deps.liveSession ? deps.liveSession(b.camera_id) : { status: 503, body: { error: 'local_live_off' } };
+        res.setHeader('Cache-Control', 'no-store');
+        return json(res, out.status, out.body);
       }
 
       // ── здоровье ──
@@ -129,7 +160,7 @@ export function startApi(deps, opts = {}) {
           return json(res, 400, { ok: false, error: 'нужен готовый rtsp или как минимум поле ip' });
         }
         const rtsp = b.rtsp || (deps.buildRtspUrl ? deps.buildRtspUrl(b) : null);
-        if (!rtsp || /undefined|\/\/:/.test(rtsp)) {
+        if (!rtsp || /undefined|\/\/:/.test(rtsp) || !isCameraUrl(rtsp)) {
           return json(res, 400, { ok: false, error: 'не удалось собрать RTSP-адрес из переданных полей' });
         }
 
@@ -138,7 +169,7 @@ export function startApi(deps, opts = {}) {
         try {
           buf = await deps.grabSnapshot(rtsp, 'probe');
         } catch (e) {
-          return json(res, 200, { ok: false, error: `кадр не получен: ${e.message}`, hint: 'проверь логин/пароль, включён ли RTSP, и не занят ли поток другим клиентом' });
+          return json(res, 200, { ok: false, error: `кадр не получен: ${redactSecrets(e.message)}`, hint: 'проверь логин/пароль, включён ли RTSP, и не занят ли поток другим клиентом' });
         }
         let dets = [];
         try { dets = (await deps.detect(buf)) || []; } catch (e) { log(`probe detect: ${e.message}`); }

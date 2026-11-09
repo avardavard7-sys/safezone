@@ -161,7 +161,7 @@ export default function DevPage() {
     try {
       const res = await fetch('/api/ai/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${(await createClient().auth.getSession()).data.session?.access_token ?? ''}` },
         body: JSON.stringify({ image: '', camera_name: 'ping' }),
       });
       const data = await res.json();

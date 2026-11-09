@@ -1,0 +1,71 @@
+name: Сборка SafeZone Bridge для Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['bridge-app-v*']
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Зависимости бриджа
+        working-directory: edge-server/bridge
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+        run: npm ci --omit=dev
+
+      - name: Тесты бриджа на Windows
+        working-directory: edge-server/bridge
+        run: |
+          node test-access.mjs
+          node test-counter.mjs
+          node test-pairing.mjs
+          node test-security.mjs
+          node test-camguard.mjs
+          node test-cloud.mjs
+
+      - name: ffmpeg (сборка LGPL)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-tmp
+          New-Item -ItemType Directory -Force -Path desktop/vendor/ffmpeg | Out-Null
+          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName desktop/vendor/ffmpeg/ffmpeg.exe
+          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter LICENSE.txt | Select-Object -First 1).FullName desktop/vendor/ffmpeg/LICENSE.txt
+
+      - name: Видеосервер MediaMTX (лицензия MIT)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/bluenviron/mediamtx/releases/download/v1.21.3/mediamtx_v1.21.3_windows_amd64.zip" -OutFile mediamtx.zip
+          Expand-Archive mediamtx.zip -DestinationPath mediamtx-tmp
+          New-Item -ItemType Directory -Force -Path desktop/vendor/mediamtx | Out-Null
+          Copy-Item mediamtx-tmp/mediamtx.exe desktop/vendor/mediamtx/mediamtx.exe
+          Copy-Item mediamtx-tmp/LICENSE desktop/vendor/mediamtx/LICENSE.txt
+
+      - name: Адрес платформы
+        shell: pwsh
+        env:
+          SUPABASE_URL: ${{ secrets.SAFEZONE_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SAFEZONE_SUPABASE_ANON_KEY }}
+          DASHBOARD_URL: ${{ vars.SAFEZONE_DASHBOARD_URL }}
+        run: |
+          if (-not $env:SUPABASE_URL -or -not $env:SUPABASE_ANON_KEY) { throw "Не заданы секреты SAFEZONE_SUPABASE_URL и SAFEZONE_SUPABASE_ANON_KEY" }
+          $dash = if ($env:DASHBOARD_URL) { $env:DASHBOARD_URL } else { "https://safezone-gamma.vercel.app" }
+          @{ supabaseUrl = $env:SUPABASE_URL; supabaseAnonKey = $env:SUPABASE_ANON_KEY; dashboardUrl = $dash; apiPort = 8099 } | ConvertTo-Json | Set-Content -Encoding utf8 desktop/config.json
+
+      - name: Сборка установщика
+        working-directory: desktop
+        run: |
+          npm install
+          npx electron-builder --win nsis --x64 --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SafeZone-Bridge-Setup
+          path: desktop/dist/*.exe

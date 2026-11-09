@@ -17,7 +17,7 @@ SECRET=$(openssl rand -hex 16)
 {
   echo "MEDIA_JWT_PUBLIC_KEY=$PUB"
   echo "MEDIA_BRIDGE_SECRET=$SECRET"
-  echo "PANEL_ORIGINS=https://safezone.vercel.app"
+  echo "PANEL_ORIGINS=https://safezone-gamma.vercel.app"
 } >> bridge.env
 chmod 600 bridge.env
 mkdir -p data

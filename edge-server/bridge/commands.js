@@ -14,6 +14,7 @@
 // выполнения бридж затирает params — пароль не залёживается в базе.
 
 import { pickStreams } from './discovery-plan.js';
+import { redactSecrets } from './safety.js';
 
 const MAX_RUNTIME_MS = 180000; // страховка: зависшая команда не блокирует очередь
 
@@ -27,7 +28,7 @@ export function createCommandRunner(deps) {
 
   async function fail(id, message) {
     await sb.from('bridge_commands').update({
-      status: 'error', error: String(message).slice(0, 500),
+      status: 'error', error: redactSecrets(String(message)).slice(0, 500),
       params: {}, finished_at: new Date().toISOString(),
     }).eq('id', id);
   }
@@ -131,7 +132,7 @@ export function createCommandRunner(deps) {
           new Promise((_, rej) => setTimeout(() => rej(new Error('превышено время выполнения')), MAX_RUNTIME_MS)),
         ]);
       } catch (e) {
-        log(`📮 Команда ${cmd.kind} не выполнена: ${e.message}`);
+        log(`📮 Команда ${cmd.kind} не выполнена: ${redactSecrets(e.message)}`);
         await fail(cmd.id, e.message);
         return;
       }

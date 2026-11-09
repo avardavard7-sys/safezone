@@ -1,5 +1,5 @@
 // yolox.js — альтернативный детектор YOLOX (Megvii, Apache-2.0) — кандидат на
-// замену yolov8n (AGPL). Тот же COCO-80, та же сигнатура detect().
+// детектор объектов. Тот же COCO-80, та же сигнатура detect().
 // Препроцессинг YOLOX: letterbox в ЛЕВЫЙ ВЕРХНИЙ угол, BGR, БЕЗ /255.
 import ort from 'onnxruntime-node';
 import path from 'path';

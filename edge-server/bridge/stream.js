@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { FFMPEG, CAMERA_PROTOCOLS, redactSecrets } from './safety.js';
 
 const SOI = Buffer.from([0xff, 0xd8]);
 const EOI = Buffer.from([0xff, 0xd9]);
@@ -35,18 +36,18 @@ export class FrameStream {
     const args = [
       '-hide_banner', '-loglevel', 'error',
       '-rtsp_transport', 'tcp',
-      '-i', this.url,
+      '-protocol_whitelist', CAMERA_PROTOCOLS, '-i', this.url,
       '-an',
       '-vf', `fps=${this.fps},scale=${this.width}:-2`,
       '-q:v', '5',
       '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1',
     ];
-    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(FFMPEG, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     this.proc = proc;
     let errTail = '';
 
     proc.stdout.on('data', chunk => this.#ingest(chunk));
-    proc.stderr.on('data', d => { errTail = (errTail + d.toString()).slice(-400); });
+    proc.stderr.on('data', d => { errTail = redactSecrets((errTail + d.toString()).slice(-400)); });
     proc.on('close', code => {
       if (this.proc !== proc) return;
       this.proc = null;

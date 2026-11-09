@@ -121,6 +121,32 @@ export function authorize(req, { key, bridgeSecret }) {
   }
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Пропуск на живое видео с этого компьютера. Выдаётся только на камеры, с которыми
+ * бридж сейчас работает, и только пока доступ клиента открыт.
+ * @returns {{status:number, body:object}}
+ */
+export function localLiveSession({ media, cameras = [], cameraId, access = null, ttlSec = 120, now = Date.now() }) {
+  if (!media || !media.enabled || !media.whep || !media.key || !media.key.privateKey) {
+    return { status: 503, body: { error: 'local_live_off' } };
+  }
+  if (access && access.allowed === false) return { status: 403, body: { error: 'access' } };
+  if (typeof cameraId !== 'string' || !UUID.test(cameraId)) return { status: 400, body: { error: 'bad_camera_id' } };
+  const cam = cameras.find(c => c && c.id === cameraId);
+  if (!cam) return { status: 404, body: { error: 'not_found' } };
+  return {
+    status: 200,
+    body: {
+      whepUrl: `${String(media.whep).replace(/\/$/, '')}/${pathFor(cam.id)}/whep`,
+      token: viewerToken(media.key, cam.id, ttlSec),
+      expiresAt: now + ttlSec * 1000,
+      local: true,
+    },
+  };
+}
+
 export class MediaSync {
   constructor({ apiBase, log = () => {}, closeAfter = '15s' }) {
     this.apiBase = apiBase.replace(/\/$/, '');

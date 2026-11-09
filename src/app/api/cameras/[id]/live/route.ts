@@ -11,7 +11,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TTL_SEC = 120;
 const noStore = { 'Cache-Control': 'no-store' };
 
-export async function POST(req: Request, { params }: { params: { id: string } }) {
+export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const params = await ctx.params;
   const limited = await rateLimit(req, 'camera-live', { limit: 120, window: 60 });
   if (limited) return limited;
 

@@ -11,6 +11,16 @@ export async function POST(req: Request) {
   const limited = await rateLimit(req, 'ai-analyze', { limit: 30, window: 60 });
   if (limited) return limited;
 
+  const header = req.headers.get('authorization') || '';
+  const accessToken = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!accessToken) return NextResponse.json({ detected: false, error: 'unauthorized' }, { status: 401 });
+  const userClient = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { headers: { Authorization: `Bearer ${accessToken}` } },
+  });
+  const { data: auth, error: authError } = await userClient.auth.getUser(accessToken);
+  if (authError || !auth?.user) return NextResponse.json({ detected: false, error: 'unauthorized' }, { status: 401 });
+
   try {
     const { image, camera_name, zone, floor, mall_id } = await req.json();
 
@@ -94,11 +104,9 @@ export async function POST(req: Request) {
     try { result = JSON.parse(clean); } catch { return NextResponse.json({ detected: false, raw: text }); }
 
     if (result.detected && mall_id) {
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const serviceKey = process.env.SUPABASE_SERVICE_KEY;
-      if (supabaseUrl && serviceKey) {
+      {
         try {
-          const sb = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+          const sb = userClient;
           await sb.from('events').insert({
             mall_id,
             camera_name: camera_name || 'Вебкамера (AI Тест)',

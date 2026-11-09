@@ -1,6 +1,6 @@
 // bench-models.mjs — замер моделей НА ТВОЕЙ МАШИНЕ (Фаза 1).
 // Запуск:  node bench-models.mjs
-// 1) Сравнивает детекторы: yolov8n vs yolox_nano vs yolox_s (латентность + что нашли)
+// 1) Сравнивает детекторы: yolox_nano и yolox_s (латентность + что нашли)
 // 2) Если рядом лежит rtmpose_m.onnx (после download-phase1-models) — меряет его
 //    скорость на этом CPU. Полная интеграция RTMPose — следующим апдейтом,
 //    когда цифры покажут что она того стоит.
@@ -11,10 +11,8 @@ import { execSync } from 'child_process';
 import ort from 'onnxruntime-node';
 import { letterbox } from './letterbox.js';
 
-console.log('Качаю тестовое фото (4 человека)...');
-const testPath = process.platform === 'win32' ? 'bench_test.jpg' : '/tmp/bench_test.jpg';
-execSync(`curl -sL --max-time 30 -o ${testPath} https://raw.githubusercontent.com/ultralytics/ultralytics/main/ultralytics/assets/bus.jpg`);
-const buf = await readFile(testPath);
+const { crowd } = await import('./test-assets/images.mjs');
+const buf = await crowd();
 
 async function benchDetector(name, detectFn, initFn) {
   await initFn();
@@ -33,9 +31,6 @@ async function benchDetector(name, detectFn, initFn) {
 }
 
 console.log('\n═══ ДЕТЕКТОРЫ (8 прогонов, прогретые) ═══');
-const { detect: v8d, init: v8i } = await import('./yolo.js');
-await benchDetector('yolov8n 640 (AGPL)', v8d, v8i);
-
 const { createYolox } = await import('./yolox.js');
 for (const [m, size] of [['yolox_nano', 416], ['yolox_s', 640]]) {
   if (!existsSync(`./${m}.onnx`)) { console.log(`${m}: файла нет, пропуск`); continue; }
@@ -44,15 +39,6 @@ for (const [m, size] of [['yolox_nano', 416], ['yolox_s', 640]]) {
 }
 
 console.log('\n═══ ПОЗЫ (вся сцена за проход) ═══');
-const { poseDetect, poseInit } = await import('./pose.js');
-await poseInit();
-await poseDetect(buf);
-{
-  const times = [];
-  let last;
-  for (let i = 0; i < 8; i++) { const t0 = Date.now(); last = await poseDetect(buf); times.push(Date.now() - t0); }
-  console.log(`yolov8n-pose 640 (AGPL)   avg ${String(Math.round(times.reduce((a,b)=>a+b)/times.length)).padStart(4)}ms | людей: ${last.persons.length}`);
-}
 if (existsSync('./rtmo_m.onnx')) {
   const { rtmoDetect, rtmoInit } = await import('./rtmo.js');
   await rtmoInit();

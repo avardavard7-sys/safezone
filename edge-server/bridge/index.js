@@ -3,9 +3,8 @@ import { spawn } from 'child_process';
 import { readFile, unlink } from 'fs/promises';
 import WebSocket from 'ws';
 import 'dotenv/config';
-import { detect as v8Detect, fireHint as yoloFireHint, init as v8Init } from './yolo.js';
+import { fireHint as yoloFireHint } from './firehint.js';
 import { createYolox } from './yolox.js';
-import { poseDetect as v8Pose, poseInit as v8PoseInit } from './pose.js';
 import { rtmoDetect, rtmoInit } from './rtmo.js';
 import { analyzeActions, analyzeBurstPoses } from './action.js';
 import { getTracker, CameraTracker } from './tracker.js';
@@ -21,7 +20,7 @@ import { discoverCameras } from './onvif.js';
 import { buildConfig, diffConfig, SCHEMA, uiSchema } from './settings.js';
 import { ensureSession, heartbeat, platformString, statePath } from './pairing.js';
 import { ComplianceSchedule } from './compliance.js';
-import { loadKey, MediaSync, internalReadUrl } from './media.js';
+import { loadKey, MediaSync, internalReadUrl, localLiveSession } from './media.js';
 import { LineCounter } from './counter.js';
 import { FrameStream } from './stream.js';
 import { planAnalyzers, tracksPayload, Throttle, watchedFromPresence } from './live.js';
@@ -32,6 +31,10 @@ import { facesInit, facesReady, decodeImage, detectFaces, alignFace, embedFace, 
 import { BlacklistMatcher } from './blacklist.js';
 import { QueueWatch, HeatAccumulator, reportDue, formatReport, judgeReturn } from './shopkit.js';
 import { readFileSync as readFs, writeFileSync as writeFs } from 'fs';
+import { installProcessGuards, singleFlight, withinHours, localTime, fetchWithTimeout, frameDiff, tmpSnapshotPath, FFMPEG, grabSnapshot, redactSecrets } from './safety.js';
+import { AccessGate, loadAccess, saveAccess } from './access.js';
+import { platformVision, platformVisionUrl } from './cloud.js';
+import { CameraGuard, signature as sceneSignature } from './camguard.js';
 import { readFileSync, existsSync } from 'fs';
 
 if (!globalThis.WebSocket) {
@@ -47,7 +50,7 @@ const {
   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, MALL_ID,
   AI_INTERVAL = '30', CONFIDENCE_THRESHOLD = '0.6', ALERT_COOLDOWN_SEC = '120',
   AFTER_HOURS_START = '22:00', AFTER_HOURS_END = '06:00',
-  MOTION_THRESHOLD = '2.0', MOTION_ENABLED = 'true', YOLO_ENABLED = 'true',
+  MOTION_THRESHOLD = '0.4', MOTION_ENABLED = 'true', YOLO_ENABLED = 'true',
   BURST_ENABLED = 'true', BURST_FRAMES = '8', BURST_FPS = '4',
   DETECTOR = 'yolox_s', POSE_MODEL = 'rtmo_m', LOCAL_TRACKER = 'true',
   LOITER_SEC = '180', ABANDONED_LOCAL_SEC = '45',
@@ -192,12 +195,12 @@ async function refreshBlacklist() {
   if (error || !data?.ok) { log(`🧑 Список не загрузился: ${error?.message || 'отказ'}`); return; }
   matcher.setEntries(data.entries || []);
   log(`🧑 Чёрный список: записей ${matcher.size}`);
-  if (matcher.size) await ensureFaces();
+  if (matcher.size && RT.FACES_ENABLED) await ensureFaces();
 }
 
 // фото из панели → лицо 112×112 и отпечаток; само фото база удаляет сразу после ответа
 async function enrollPending() {
-  if (enrolling || !bridgeToken) return;
+  if (enrolling || !bridgeToken || !RT.FACES_ENABLED) return;
   enrolling = true;
   try {
     if (!(await ensureFaces())) return;
@@ -257,7 +260,7 @@ function ensureOverlayChannel() {
 function syncCounting(cams) {
   lastCams = cams;
   ensureOverlayChannel();
-  const plan = planAnalyzers({ cams, countLines, regions, watched, features: objectFeatures, maxOverlay: MAX_OVERLAY, faceCameras, blacklistSize: matcher.size });
+  const plan = planAnalyzers({ cams, countLines, regions, watched, features: objectFeatures, maxOverlay: MAX_OVERLAY, faceCameras: RT.FACES_ENABLED ? faceCameras : new Set(), blacklistSize: matcher.size });
 
   for (const [id, c] of counting) {
     if (!plan.has(id)) { c.stream.stop(); counting.delete(id); log(`🎞 Поток остановлен: ${c.name}`); }
@@ -357,7 +360,7 @@ async function sendConcealmentAlert(cam, alert, frame) {
   const image = await concealmentEvidence(alert, frame);
   log(`  🛍 ${cam.name}: ${description}`);
   try {
-    await sendTelegramPhoto(image, `🛍 <b>Подозрение на сокрытие</b>\n${description}\n📹 ${cam.name}\n🕐 ${new Date(alert.conceal.at).toLocaleTimeString('ru-RU', { timeZone: 'Asia/Almaty' })}`);
+    await sendTelegramPhoto(image, `🛍 <b>Подозрение на сокрытие</b>\n${description}\n📹 ${cam.name}\n🕐 ${new Date(alert.conceal.at).toLocaleTimeString('ru-RU', { timeZone: SITE_TZ })}`);
   } catch (e) { log(`  ⚠️ полка telegram: ${e.message}`); }
   const { error } = await insertDroppingUnknownColumns(sb, 'events', {
     mall_id: cam.mall_id || mallId,
@@ -382,7 +385,7 @@ async function sendCashAlert(cam, alert, frame, customerPolys) {
   const at = alert.kind === 'no_customer' ? alert.at : alert.conceal.at;
   log(`  💵 ${cam.name}: ${description}`);
   try {
-    await sendTelegramPhoto(image, `💵 <b>Подозрение на кассе</b>\n${description}\n📹 ${cam.name}\n🕐 ${new Date(at).toLocaleTimeString('ru-RU', { timeZone: 'Asia/Almaty' })}`);
+    await sendTelegramPhoto(image, `💵 <b>Подозрение на кассе</b>\n${description}\n📹 ${cam.name}\n🕐 ${new Date(at).toLocaleTimeString('ru-RU', { timeZone: SITE_TZ })}`);
   } catch (e) { log(`  ⚠️ касса telegram: ${e.message}`); }
   const { error } = await insertDroppingUnknownColumns(sb, 'events', {
     mall_id: cam.mall_id || mallId,
@@ -416,7 +419,7 @@ async function sendBlacklistAlert(cam, hit, frame, face) {
   const image = await blacklistEvidence(hit, frame, face);
   log(`  🧑 ${cam.name}: ${description}`);
   try {
-    await sendTelegramPhoto(image, `🧑 <b>Возможное совпадение</b>\n${description}\n📹 ${cam.name}\n🕐 ${new Date().toLocaleTimeString('ru-RU', { timeZone: 'Asia/Almaty' })}`);
+    await sendTelegramPhoto(image, `🧑 <b>Возможное совпадение</b>\n${description}\n📹 ${cam.name}\n🕐 ${new Date().toLocaleTimeString('ru-RU', { timeZone: SITE_TZ })}`);
   } catch (e) { log(`  ⚠️ список telegram: ${e.message}`); }
   const { error } = await insertDroppingUnknownColumns(sb, 'events', {
     mall_id: cam.mall_id || mallId, camera_id: cam.id, camera_name: cam.name, zone_id: cam.zone_id,
@@ -475,10 +478,11 @@ const MEDIA = {
   api: process.env.MEDIA_API || 'http://127.0.0.1:9997',
   rtsp: process.env.MEDIA_RTSP || 'rtsp://127.0.0.1:8554',
   secret: process.env.MEDIA_BRIDGE_SECRET || '',
+  whep: (process.env.MEDIA_WHEP_URL || '').replace(/\/$/, ''),
   key: null,
 };
 if (MEDIA.enabled) {
-  try { MEDIA.key = loadKey(process.env.MEDIA_JWT_PUBLIC_KEY); } catch (e) { MEDIA.keyError = e.message; }
+  try { MEDIA.key = loadKey(process.env.MEDIA_JWT_PRIVATE_KEY || process.env.MEDIA_JWT_PUBLIC_KEY); } catch (e) { MEDIA.keyError = e.message; }
 }
 const mediaSync = MEDIA.enabled ? new MediaSync({ apiBase: MEDIA.api, log: m => log(m) }) : null;
 let mediaSyncSig = '';
@@ -524,21 +528,16 @@ function rebuildZoneEngine() {
 }
 rebuildZoneEngine();
 
-// Выбор детектора: yolov8n (текущий, AGPL) | yolox_s / yolox_nano (Apache-2.0)
+// Детектор и скелеты: только модели с лицензией Apache-2.0.
 const YOLOX_SIZES = { yolox_s: 640, yolox_tiny: 416, yolox_nano: 416, yolox_m: 640, yolox_l: 640 };
-let yoloDetect = v8Detect, yoloInit = v8Init;
-if (YOLOX_SIZES[RT.DETECTOR]) {
-  const yx = createYolox(RT.DETECTOR + '.onnx', YOLOX_SIZES[RT.DETECTOR]);
-  yoloDetect = yx.detect;
-  yoloInit = yx.init;
-}
+const DETECTOR_FALLBACK = 'yolox_s';
+const detectorHere = (name) => !!YOLOX_SIZES[name] && existsSync(new URL(`./${name}.onnx`, import.meta.url));
+const detectorName = detectorHere(RT.DETECTOR) ? RT.DETECTOR : DETECTOR_FALLBACK;
+if (detectorName !== RT.DETECTOR) console.log(`Детектор «${RT.DETECTOR}» недоступен, использую ${detectorName}`);
+const yx = createYolox(detectorName + '.onnx', YOLOX_SIZES[detectorName]);
+const yoloDetect = yx.detect, yoloInit = yx.init;
 
-// Позы: yolov8n-pose (быстрее, AGPL) | rtmo_m (точнее в толпе/перекрытиях, Apache-2.0)
-let poseDetect = v8Pose, poseInit = v8PoseInit;
-if (RT.POSE_MODEL === 'rtmo_m') {
-  poseDetect = rtmoDetect;
-  poseInit = rtmoInit;
-}
+const poseDetect = rtmoDetect, poseInit = rtmoInit;
 
 const GEMINI_KEYS = [GEMINI_API_KEY, GEMINI_API_KEY2, GEMINI_API_KEY3].filter(Boolean);
 let geminiKeyIdx = 0;
@@ -634,41 +633,19 @@ const ABANDONED_OBJECT_SEC = 60;
 
 let intervalRef = null;
 const log = (m) => console.log(`[${new Date().toISOString()}] ${m}`);
+const SITE_TZ = process.env.SITE_TIMEZONE || 'Asia/Almaty';
+const PLATFORM_VISION_URL = platformVisionUrl(process.env.PLATFORM_URL);
+installProcessGuards(log);
+const ACCESS_FILE = (process.env.STATE_FILE || './data/state.json').replace(/[^/\\]+$/, '') + 'access.json';
+const accessGate = new AccessGate({ graceMs: (Number(process.env.OFFLINE_GRACE_HOURS) || 72) * 3600 * 1000, ...loadAccess(ACCESS_FILE) });
+let lastAccessState = null;
+const cameraGuard = new CameraGuard({
+  file: ACCESS_FILE.replace(/access\.json$/, 'camguard.json'),
+  onAccept: (id) => log(`📷 Камера ${id}: новый вид держится сутки, принят за образец`),
+});
 
 function isAfterHours() {
-  const now = new Date();
-  const currentMin = now.getHours() * 60 + now.getMinutes();
-  const [sh, sm] = RT.AFTER_HOURS_START.split(':').map(Number);
-  const [eh, em] = RT.AFTER_HOURS_END.split(':').map(Number);
-  const startMin = sh * 60 + sm;
-  const endMin = eh * 60 + em;
-  if (startMin > endMin) return currentMin >= startMin || currentMin < endMin;
-  return currentMin >= startMin && currentMin < endMin;
-}
-
-function grabSnapshot(rtspUrl, cameraId) {
-  return new Promise((resolve, reject) => {
-    const tmpFile = `/tmp/snap_${cameraId}_${Date.now()}.jpg`;
-    const args = ['-rtsp_transport', 'tcp', '-i', rtspUrl, '-frames:v', '1', '-q:v', '5', '-y', tmpFile];
-    const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stderr = '';
-    ff.stderr.on('data', c => { stderr += c.toString(); });
-    const timer = setTimeout(() => { ff.kill('SIGKILL'); reject(new Error('timeout')); }, 20000);
-    ff.on('close', async (code) => {
-      clearTimeout(timer);
-      try {
-        if (code === 0) {
-          const buf = await readFile(tmpFile);
-          await unlink(tmpFile).catch(() => {});
-          resolve(buf);
-        } else {
-          await unlink(tmpFile).catch(() => {});
-          reject(new Error(`exit ${code}: ${stderr.split('\n').slice(-3).join(' ').slice(-200)}`));
-        }
-      } catch (e) { reject(e); }
-    });
-    ff.on('error', e => { clearTimeout(timer); reject(e); });
-  });
+  return withinHours(RT.AFTER_HOURS_START, RT.AFTER_HOURS_END, SITE_TZ);
 }
 
 function buildRtspUrl(cam) {
@@ -689,9 +666,9 @@ async function sendTelegramPhoto(buffer, caption) {
     formData.append('caption', caption);
     formData.append('parse_mode', 'HTML');
     formData.append('photo', new Blob([buffer], { type: 'image/jpeg' }), 'screenshot.jpg');
-    const res = await fetch(`https://api.telegram.org/bot${tgToken}/sendPhoto`, {
+    const res = await fetchWithTimeout(`https://api.telegram.org/bot${tgToken}/sendPhoto`, {
       method: 'POST', body: formData,
-    });
+    }, 20000);
     if (res.ok) { log('Telegram photo sent'); return; }
     const errText = await res.text();
     log(`Telegram sendPhoto ${res.status}: ${errText.slice(0, 250)}`);
@@ -705,11 +682,11 @@ async function sendTelegramPhoto(buffer, caption) {
 async function sendTelegramText(text) {
   if (!tgToken || !tgChat) return;
   try {
-    await fetch(`https://api.telegram.org/bot${tgToken}/sendMessage`, {
+    await fetchWithTimeout(`https://api.telegram.org/bot${tgToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: tgChat, text, parse_mode: 'HTML' }),
-    });
+    }, 15000);
   } catch {}
 }
 
@@ -934,7 +911,21 @@ async function analyzeFrame(jpegBuffer, cam, localHint = null, checks = []) {
     }
   }
 
-  if (OPENROUTER_API_KEY) {
+  // Ключи моделей лежат на платформе: бридж отправляет кадр со своим токеном.
+  if (!result && PLATFORM_VISION_URL && bridgeToken) {
+    try {
+      const r = await platformVision({ url: PLATFORM_VISION_URL, token: bridgeToken, prompt: promptWithChecks, base64 });
+      result = r.result;
+      usedProvider = r.provider;
+    } catch (e) {
+      log(`  ⚠️ Платформа: ${e.message}`);
+      if (e.kind === 'access' || e.kind === 'denied' || e.kind === 'budget') {
+        return { people_count: 0, is_safe: true, threats: [], scene_description: `облачная проверка недоступна: ${e.message}` };
+      }
+    }
+  }
+
+  if (!result && OPENROUTER_API_KEY) {
 
     const orModels = [OPENROUTER_MODEL + ':free', OPENROUTER_MODEL];
     for (const orModel of orModels) {
@@ -1137,30 +1128,10 @@ const failState = {};        // троттлинг логов недоступн
 const tiledState = {};       // дальнозоркость: счётчик циклов + «прицел» на дальнего   // отпечаток сцены на момент последнего облачного анализа (per cam)
 let cloudBudget = new CloudBudget(RT.MAX_CLOUD_PER_CAM_HOUR);
 
-async function frameDiff(buf1, buf2) {
-  return new Promise((resolve) => {
-    try {
-      const ff = spawn('ffmpeg', [
-        '-i', 'pipe:3', '-i', 'pipe:4',
-        '-filter_complex', 'ssim', '-f', 'null', '-',
-      ], { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
-      let stderr = '';
-      ff.stderr.on('data', (d) => { stderr += d.toString(); });
-      ff.stdio[3].write(buf1); ff.stdio[3].end();
-      ff.stdio[4].write(buf2); ff.stdio[4].end();
-      ff.on('close', () => {
-        const m = stderr.match(/All:\s*([0-9.]+)/);
-        resolve(m ? (1 - parseFloat(m[1])) * 100 : 100);
-      });
-      ff.on('error', () => resolve(100));
-    } catch { resolve(100); }
-  });
-}
-
 /** Тревога по зоне: Telegram + БД. Облако НЕ вызывается — правило локальное. */
 async function sendZoneAlert(cam, za, jpegBuffer) {
   const icon = za.type === 'uncleaned_table' ? '🍽' : '🔔';
-  const caption = `${icon} <b>${za.name}</b>\n${za.description}\n📹 ${cam.name}${cam.floor ? ` · этаж ${cam.floor}` : ''}\n🕐 ${new Date().toLocaleTimeString('ru-RU')}`;
+  const caption = `${icon} <b>${za.name}</b>\n${za.description}\n📹 ${cam.name}${cam.floor ? ` · этаж ${cam.floor}` : ''}\n🕐 ${localTime(SITE_TZ)}`;
   try {
     await sendTelegramPhoto(jpegBuffer, caption);
   } catch (e) { log(`  ⚠️ zone telegram: ${e.message}`); }
@@ -1199,6 +1170,21 @@ async function processCamera(cam) {
   failState[cam.id] = null;
   log(`[OK] ${cam.name}: ${Math.round(jpegBuffer.length / 1024)}KB`);
 
+  if (RT.CAMERA_GUARD) {
+    try {
+      const issue = cameraGuard.check(cam.id, await sceneSignature(jpegBuffer));
+      if (issue) {
+        log(`  📷 ${cam.name}: ${issue.description}`);
+        await sendZoneAlert(cam, {
+          type: issue.type, severity: 'medium', description: issue.description,
+          name: issue.state === 'blocked' ? 'Камера не видит сцену' : 'Камеру сдвинули',
+        }, jpegBuffer);
+      }
+    } catch (e) {
+      log(`  ⚠️ контроль камеры: ${e.message}`);
+    }
+  }
+
   const base64 = jpegBuffer.toString('base64');
   const { error: camUpdErr } = await sb.from('cameras').update({
     last_frame_base64: base64,
@@ -1211,7 +1197,7 @@ async function processCamera(cam) {
   }
 
   if (!settings.ai_enabled || cam.ai_enabled === false) return;
-  if (!OPENROUTER_API_KEY && GEMINI_KEYS.length === 0 && !GROQ_API_KEY && !OPENAI_API_KEY) return;
+  if (!OPENROUTER_API_KEY && GEMINI_KEYS.length === 0 && !GROQ_API_KEY && !OPENAI_API_KEY && !(PLATFORM_VISION_URL && bridgeToken) && !LOCAL_VLM_URL) return;
 
   let frameToAnalyze = jpegBuffer;
   let rapidMode = false;
@@ -1791,8 +1777,11 @@ async function sendHeartbeat() {
       last_error: runtime.lastError,
     });
     applyBridgePayload(payload);
+    accessGate.onHeartbeat(payload);
+    saveAccess(ACCESS_FILE, accessGate);
     heartbeatFails = 0;
   } catch (e) {
+    accessGate.onHeartbeatError(e);
     heartbeatFails++;
     // одна строка на пять неудач: не засоряем лог при коротком обрыве связи
     if (heartbeatFails === 1 || heartbeatFails % 5 === 0) {
@@ -1801,23 +1790,50 @@ async function sendHeartbeat() {
   }
 }
 
-async function loop() {
+async function loopOnce() {
   runtime.cycles++;
   await sendHeartbeat();
+  if (bridgeToken) {
+    const acc = accessGate.status();
+    runtime.access = acc;
+    if (acc.state !== lastAccessState) {
+      log(`${acc.allowed ? '🔓' : '🔒'} Доступ: ${acc.message}`);
+      lastAccessState = acc.state;
+    }
+    if (!acc.allowed) {
+      await syncMedia([]).catch(() => {});
+      syncCounting([]);
+      runtime.cameras = 0;
+      return;
+    }
+  }
   await loadSettings();
   if (commandRunner) commandRunner.tick().catch(e => log(`команды: ${e.message}`));
   let q = sb.from('cameras').select('*').eq('is_active', true);
   if (mallId) q = q.eq('mall_id', mallId);
   const { data: cams, error } = await q;
   if (error) { runtime.lastError = error.message; log(`DB error: ${error.message}`); return; }
-  runtime.cameras = cams?.length || 0;
-  await syncMedia(cams || []);
-  syncCounting(cams || []);
+  const allowedCams = bridgeToken ? accessGate.limitCameras(cams || []) : (cams || []);
+  if (cams && allowedCams.length < cams.length && runtime.camLimitLogged !== allowedCams.length) {
+    log(`Лимит доступа: обрабатываю ${allowedCams.length} камер из ${cams.length}`);
+    runtime.camLimitLogged = allowedCams.length;
+  }
+  runtime.cameras = allowedCams.length;
+  await syncMedia(allowedCams);
+  syncCounting(allowedCams);
   runtime.lastError = null;
-  if (!cams?.length) { log('No active cameras'); return; }
+  if (!allowedCams.length) { log('No active cameras'); return; }
 
-  await Promise.allSettled(cams.map(cam => processCamera(cam)));
+  await Promise.allSettled(allowedCams.map(cam => processCamera(cam)));
 }
+
+const loop = singleFlight(loopOnce, {
+  onSkip: (n) => {
+    runtime.skippedCycles = (runtime.skippedCycles || 0) + 1;
+    if (n === 1) log('⏳ предыдущий проход ещё идёт — новый запуск пропущен');
+  },
+  onError: (e) => { runtime.lastError = e.message; log(`Ошибка прохода: ${e.message}`); },
+});
 
 function printBanner() {
   log(`=== SafeZone Bridge ${BRIDGE_VERSION} — PAIRED (привязка по коду, зоны и настройки из панели) ===`);
@@ -1834,6 +1850,7 @@ function printBanner() {
     : 'LIVE: выключен (бридж на объекте, камеры читаются напрямую)');
   log(`Зоны (локально, $0): ${zoneEngine ? `✓ правил ${zoneEngine.rules.length}: ${zoneEngine.rules.map(r => r.name).join(', ')}` : '✗ нет активных — нарисуй их в панели: Редактор зон'}`);
   log(`Предохранители: 🧊 отпечаток сцены (статика → $0, перепроверка ${RT.STATIC_RECHECK_MIN} мин) | 🛑 лимит ${RT.MAX_CLOUD_PER_CAM_HOUR} обл.вызовов/час/камеру`);
+  log(`Платформа (ключи моделей на сервере): ${PLATFORM_VISION_URL ? '✓ ' + PLATFORM_VISION_URL : '✗ не задана'}`);
   log(`Локальный VLM: ${LOCAL_VLM_URL ? `✓ ${LOCAL_VLM_MODEL} @ ${LOCAL_VLM_URL}` : '✗ не настроен'}${RT.LOCAL_ONLY ? ' | 🔒 LOCAL_ONLY: кадры НЕ покидают объект, облако отключено' : ''}`);
   log(`Telegram: ${tgToken ? 'YES' : 'NO'} | Chat: ${tgChat || '-'}`);
   log(`After-Hours: ${RT.AFTER_HOURS_START} — ${RT.AFTER_HOURS_END} (now: ${isAfterHours() ? 'AFTER-HOURS' : 'WORK-TIME'})`);
@@ -1917,11 +1934,16 @@ function announceStart() {
         password: b.password || b.pass || '', rtsp_path: b.path || b.rtsp_path,
         channel: b.channel || 1, vendor: b.vendor,
       }),
+      liveSession: (cameraId) => localLiveSession({ media: MEDIA, cameras: lastCams, cameraId, access: runtime.access }),
       getStatus: () => ({
+        local_live: Boolean(MEDIA.enabled && MEDIA.whep && MEDIA.key && MEDIA.key.privateKey),
+        paired: !!bridgeToken,
+        cameras: runtime.cameras,
+        access: runtime.access || null,
         detector: RT.DETECTOR, pose: RT.POSE_MODEL,
         zones: zoneEngine ? zoneEngine.rules.length : 0,
         settings_source: settingsTableMissing ? 'env' : 'db',
-        cloud: { openrouter: !!OPENROUTER_API_KEY, gemini: GEMINI_KEYS.length, groq: !!GROQ_API_KEY, openai: !!OPENAI_API_KEY },
+        cloud: { platform: !!PLATFORM_VISION_URL, openrouter: !!OPENROUTER_API_KEY, gemini: GEMINI_KEYS.length, groq: !!GROQ_API_KEY, openai: !!OPENAI_API_KEY },
       }),
       getSettings: () => ({ schema: uiSchema(), current: { ...RT }, source: settingsTableMissing ? 'env' : 'db' }),
       onSettingsSaved: () => loadBridgeSettings(),
