@@ -1,0 +1,8 @@
+Сторонние программы в составе установщика SafeZone Bridge
+
+MediaMTX 1.21.3 — видеосервер. Лицензия MIT. https://github.com/bluenviron/mediamtx
+FFmpeg (сборка LGPL) — захват видео. Лицензия LGPL 2.1 или новее. https://ffmpeg.org
+Electron — оболочка приложения. Лицензия MIT. https://www.electronjs.org
+
+Тексты лицензий MediaMTX и FFmpeg кладутся в установщик при сборке рядом с программами.
+Модели распознавания и их лицензии перечислены в edge-server/bridge/MODELS-NOTICE.txt.
