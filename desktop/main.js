@@ -36,6 +36,7 @@ const sameOrigin = (a, b) => { try { return new URL(a).origin === new URL(b).ori
 function openOutside(u) { if (isWebUrl(u)) shell.openExternal(u); }
 const ALLOWED_PERMISSIONS = new Set(['fullscreen', 'clipboard-sanitized-write', 'local-network-access', 'local-network', 'loopback-network']);
 let quitting = false, restartTimer = null, restartDelay = 5000, pollTimer = null;
+let lastExit = '', lastTail = '';
 let coldCrashes = 0, warmed = false, safeMode = process.env.SZ_SAFE_MODE === '1';
 const EXIT_HINTS = {
   3221225501: 'процессор этого компьютера не поддерживает инструкции, нужные модели распознавания',
@@ -136,6 +137,8 @@ function startBridge(pairingCode = '') {
       API_PORT: String(API_PORT),
       API_HOST: '127.0.0.1',
       SZ_ON_SITE: '1',
+      SZ_LAST_EXIT: lastExit,
+      SZ_LAST_LOG: lastTail,
       SZ_SAFE_MODE: safeMode ? '1' : '',
       ...mediaEnv,
     },
@@ -170,6 +173,8 @@ function startBridge(pairingCode = '') {
     }
     state.phase = 'starting';
     state.restarts++;
+    lastExit = String(code);
+    lastTail = logLines.slice(-12).join('\n').replace(/rtsp:\/\/[^@\s]*@/g, 'rtsp://***@').slice(-1500);
     const hint = EXIT_HINTS[code] ? ` — ${EXIT_HINTS[code]}` : '';
     if (!warmed && !safeMode) {
       coldCrashes++;
