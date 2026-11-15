@@ -25,7 +25,7 @@ begin
   end loop;
 
   select id into b_id from bridges
-   where mall_id = p_mall and auth_user_id is null
+   where mall_id = p_mall and auth_user_id is null and paired_at is null
    limit 1;
 
   if b_id is null then
