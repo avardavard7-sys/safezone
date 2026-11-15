@@ -135,6 +135,7 @@ function startBridge(pairingCode = '') {
       API_ENABLED: 'true',
       API_PORT: String(API_PORT),
       API_HOST: '127.0.0.1',
+      SZ_ON_SITE: '1',
       SZ_SAFE_MODE: safeMode ? '1' : '',
       ...mediaEnv,
     },
@@ -251,6 +252,7 @@ ipcMain.handle('open-dashboard', () => { openDashboard(); return true; });
 ipcMain.handle('pair', (_e, code) => {
   const clean = String(code || '').trim().toUpperCase();
   if (!/^[A-Z0-9]{8}$/.test(clean)) { state.error = 'Код состоит из 8 букв и цифр'; push(); return false; }
+  for (const f of ['state.json', 'access.json']) { try { fs.unlinkSync(path.join(dataDir(), f)); } catch {} }
   startBridge(clean);
   return true;
 });

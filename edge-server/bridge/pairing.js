@@ -69,6 +69,15 @@ export async function signIn(sb, email, password) {
 export async function ensureSession({ sb, version, platform, pairingCode, log = () => {} }) {
   let state = loadState();
 
+  if (state && pairingCode) {
+    try {
+      await signIn(sb, state.email, state.password);
+    } catch {
+      log('Сохранённая привязка больше не действует — привязываюсь заново по новому коду');
+      state = null;
+    }
+  }
+
   if (!state) {
     if (!pairingCode) {
       throw new Error(

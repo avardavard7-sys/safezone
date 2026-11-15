@@ -1945,7 +1945,7 @@ function announceStart() {
   // Команды из панели через Supabase — работает из облака и с телефона,
   // без прямого соединения браузер→localhost
   commandRunner = createCommandRunner({
-    serverMode: () => MEDIA.enabled,
+    serverMode: () => MEDIA.enabled && process.env.SZ_ON_SITE !== '1',
     siteSubnets: () => siteSubnets,
     sb, mallId, log,
     discoverCameras,
