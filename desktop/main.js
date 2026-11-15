@@ -135,6 +135,7 @@ function startBridge(pairingCode = '') {
       API_ENABLED: 'true',
       API_PORT: String(API_PORT),
       API_HOST: '127.0.0.1',
+      SZ_ON_SITE: '1',
       SZ_SAFE_MODE: safeMode ? '1' : '',
       ...mediaEnv,
     },
