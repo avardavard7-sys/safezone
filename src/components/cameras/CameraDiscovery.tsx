@@ -12,7 +12,7 @@ import { useAuth } from '@/store/auth';
 import { Check, KeyRound, Loader2, Plus, ScanSearch, Trash2, TriangleAlert } from 'lucide-react';
 
 const POLL_MS = 2000;
-const TIMEOUT_MS = 200000;
+const TIMEOUT_MS = 450000;
 
 type Stream = {
   host: string; ip: string; port: number; path: string; channel: number | null;
@@ -55,7 +55,7 @@ export function CameraDiscovery({ onAdded }: { onAdded?: () => void }) {
       await new Promise(r => timers.current.push(setTimeout(r, POLL_MS)));
       const { data: row } = await sb.from('bridge_commands').select('status,result,error').eq('id', cmd.id).maybeSingle();
       if (!row) continue;
-      if (row.status === 'running') setStage('Ищу камеры в сети объекта — это займёт до минуты…');
+      if (row.status === 'running') setStage('Ищу камеры в сети объекта — обычно до минуты, в большой сети до нескольких минут…');
       if (row.status === 'done') return row.result;
       if (row.status === 'error') throw new Error(row.error || 'бридж вернул ошибку');
     }

@@ -118,24 +118,28 @@ export async function probeOnvif(ip, port, path, timeoutMs = 1500) {
 
 /** TCP-развёртка подсети — работает там, где мультикаст зарезан */
 export async function sweepSubnet(subnetPrefix, { ports = ONVIF_PORTS, paths = SERVICE_PATHS, concurrency = 40, onProgress } = {}) {
-  const ips = Array.from({ length: 254 }, (_, i) => `${subnetPrefix}.${i + 1}`);
+  // сначала быстрая проверка открытых портов, SOAP — только туда, где порт отвечает:
+  // иначе каждый пустой адрес ждёт таймаут по всем портам и путям, и сеть перебирается минутами
+  const open = await scanSubnet(subnetPrefix, { ports, timeoutMs: 700 });
+  const jobs = [];
+  for (const [ip, list] of open) jobs.push([ip, list]);
   const found = [];
   let idx = 0, done = 0;
 
   async function worker() {
-    while (idx < ips.length) {
-      const ip = ips[idx++];
+    while (idx < jobs.length) {
+      const [ip, list] = jobs[idx++];
       outer:
-      for (const port of ports) {
+      for (const port of list) {
         for (const path of paths) {
           const url = await probeOnvif(ip, port, path);
           if (url) { found.push(url); break outer; }
         }
       }
-      if (onProgress) onProgress(++done, ips.length);
+      if (onProgress) onProgress(++done, jobs.length);
     }
   }
-  await Promise.all(Array.from({ length: concurrency }, worker));
+  await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length || 1) }, worker));
   return found;
 }
 
@@ -243,7 +247,7 @@ export function splitRtsp(url) {
  * '192.168.10.8.1-254' — несуществующим адресам, поэтому не находила ничего.
  */
 import { planTargets } from './discovery-plan.js';
-import { findWithoutOnvif } from './netscan.js';
+import { findWithoutOnvif, scanSubnet } from './netscan.js';
 
 export function normalizeSubnet(input) {
   if (!input) return null;

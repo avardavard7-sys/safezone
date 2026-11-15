@@ -16,7 +16,7 @@
 import { pickStreams } from './discovery-plan.js';
 import { redactSecrets } from './safety.js';
 
-const MAX_RUNTIME_MS = 180000; // страховка: зависшая команда не блокирует очередь
+const MAX_RUNTIME_MS = 420000; // страховка: зависшая команда не блокирует очередь
 
 /**
  * @param {object} deps { sb, mallId, log, discoverCameras, grabSnapshot, detect, buildRtspUrl }
