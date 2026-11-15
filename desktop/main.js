@@ -251,6 +251,7 @@ ipcMain.handle('open-dashboard', () => { openDashboard(); return true; });
 ipcMain.handle('pair', (_e, code) => {
   const clean = String(code || '').trim().toUpperCase();
   if (!/^[A-Z0-9]{8}$/.test(clean)) { state.error = 'Код состоит из 8 букв и цифр'; push(); return false; }
+  for (const f of ['state.json', 'access.json']) { try { fs.unlinkSync(path.join(dataDir(), f)); } catch {} }
   startBridge(clean);
   return true;
 });
