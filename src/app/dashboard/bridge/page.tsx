@@ -26,8 +26,11 @@ type Bridge = {
 };
 
 export default function BridgePage() {
-  const { mall } = useAuth();
+  const { mall, profile } = useAuth();
+  const isDev = profile?.role === 'developer';
   const [list, setList] = useState<Bridge[]>([]);
+  const [objects, setObjects] = useState<{ id: string; name: string }[]>([]);
+  const [target, setTarget] = useState('');
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
@@ -37,13 +40,18 @@ export default function BridgePage() {
     load();
     const t = setInterval(load, 15000);   // статус обновляется сам
     return () => clearInterval(t);
-  }, [mall?.id]);
+  }, [mall?.id, isDev]);
 
   async function load() {
     const sb = createClient();
     await sb.rpc('mark_stale_bridges');   // молчит больше 2 минут → офлайн
-    const { data, error } = await sb.from('bridges').select('*')
-      .eq('mall_id', mall?.id).order('created_at', { ascending: false });
+    let q = sb.from('bridges').select('*').order('created_at', { ascending: false });
+    if (!isDev) q = q.eq('mall_id', mall?.id);
+    const { data, error } = await q;
+    if (isDev) {
+      const m = await sb.from('malls').select('id, name').order('name');
+      if (m.data) setObjects(m.data);
+    }
     if (error && !/relation|does not exist/i.test(error.message)) toast.error(error.message);
     setList(data || []);
     setLoading(false);
@@ -53,7 +61,9 @@ export default function BridgePage() {
     setCreating(true);
     try {
       const sb = createClient();
-      const { data, error } = await sb.rpc('create_bridge', { bridge_name: name.trim() || 'Бридж' });
+      const { data, error } = isDev
+        ? await sb.rpc('dev_create_bridge', { p_mall: target || mall?.id, p_name: name.trim() || 'Бридж' })
+        : await sb.rpc('create_bridge', { bridge_name: name.trim() || 'Бридж' });
       if (error) throw new Error(error.message);
       toast.success(`Код готов: ${data.pairing_code}`);
       setName('');
@@ -109,6 +119,12 @@ export default function BridgePage() {
           Больше ничего настраивать не нужно.
         </p>
         <div className="flex gap-2 flex-wrap">
+          {isDev && (
+            <select value={target || mall?.id || ''} onChange={e => setTarget(e.target.value)}
+              className="min-w-[200px] px-3 py-2 rounded-xl bg-surface-200 border border-surface-300 text-white text-sm focus:border-primary focus:outline-none">
+              {objects.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          )}
           <input value={name} onChange={e => setName(e.target.value)}
             placeholder="Название, например: Компьютер кассы"
             className="flex-1 min-w-[200px] px-3 py-2 rounded-xl bg-surface-200 border border-surface-300 text-white text-sm focus:border-primary focus:outline-none" />
@@ -128,7 +144,7 @@ export default function BridgePage() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {list.map(b => <BridgeCard key={b.id} b={b} onCopy={copy} onRemove={remove} onAccess={saveAccess} />)}
+          {list.map(b => <BridgeCard key={b.id} b={b} objectName={isDev ? objects.find(o => o.id === (b as any).mall_id)?.name : undefined} onCopy={copy} onRemove={remove} onAccess={saveAccess} />)}
         </div>
       )}
 
@@ -137,9 +153,9 @@ export default function BridgePage() {
           <Terminal className="w-4 h-4" /> Как установить на компьютере объекта
         </h3>
         <ol className="text-sm text-slate-400 space-y-2 list-decimal list-inside">
-          <li>Установить <b className="text-white">Docker Desktop</b> и запустить его</li>
-          <li>Скачать и распаковать архив бриджа</li>
-          <li>Запустить <code className="text-success">start.bat</code> и ввести код из этой страницы</li>
+          <li>Установить программу <b className="text-white">SafeZone Bridge</b> на компьютер в одной сети с камерами</li>
+          <li>Если Windows покажет предупреждение — «Подробнее» → «Выполнить в любом случае»</li>
+          <li>Ввести код с этой страницы и нажать «Привязать»</li>
         </ol>
         <p className="text-xs text-slate-500 mt-3">
           Дальше программа работает сама и запускается вместе с компьютером.
@@ -150,7 +166,7 @@ export default function BridgePage() {
   );
 }
 
-function BridgeCard({ b, onCopy, onRemove, onAccess }: any) {
+function BridgeCard({ b, objectName, onCopy, onRemove, onAccess }: any) {
   const s = b.stats || {};
   const seen = b.last_seen_at ? new Date(b.last_seen_at) : null;
   const ago = seen ? Math.round((Date.now() - seen.getTime()) / 1000) : null;
@@ -169,6 +185,7 @@ function BridgeCard({ b, onCopy, onRemove, onAccess }: any) {
               : b.pairing_code ? <Clock className="w-5 h-5 text-warning" />
               : <XCircle className="w-5 h-5 text-danger" />}
             <span className="text-white font-medium">{b.name}</span>
+            {objectName && <span className="text-xs px-2 py-0.5 rounded bg-primary/15 text-primary-light">{objectName}</span>}
             <span className={`text-xs px-2 py-0.5 rounded-full ${
               b.status === 'online' ? 'bg-success/15 text-success'
               : b.pairing_code ? 'bg-warning/15 text-warning' : 'bg-danger/15 text-danger'}`}>

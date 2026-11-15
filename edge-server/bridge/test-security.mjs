@@ -60,11 +60,15 @@ console.log('\nЧтение файлов компьютера через адр�
   }
   ok('ни один опасный адрес не дошёл до ffmpeg', probed.length === 0, probed.join(' | '));
   ok('проверка адреса: rtsp и rtsps проходят', isCameraUrl('rtsp://10.0.0.5:554/stream') && isCameraUrl('rtsps://cam/x') && !isCameraUrl(' file:///x') && !isCameraUrl(null));
-  const real = spawnSync('ffmpeg', ['-hide_banner', '-protocol_whitelist', CAMERA_PROTOCOLS, '-i', 'file:/etc/hostname', '-f', 'null', '-'], { encoding: 'utf8' });
-  info(`настоящий ffmpeg с белым списком на file: → ${(real.stderr.match(/[^\n]*whitelist[^\n]*/) || ['?'])[0].trim().slice(0, 90)}`);
-  ok('даже если адрес пройдёт проверку, ffmpeg откажется читать файл', real.status !== 0 && /whitelist/i.test(real.stderr));
-  const net = spawnSync('ffmpeg', ['-hide_banner', '-protocol_whitelist', CAMERA_PROTOCOLS, '-rtsp_transport', 'tcp', '-i', 'rtsp://127.0.0.1:1/x', '-f', 'null', '-'], { encoding: 'utf8', timeout: 15000 });
-  ok('белый список не мешает подключаться к камерам по RTSP', !/whitelist/i.test(net.stderr), net.stderr.slice(-160));
+  const hasFfmpeg = !spawnSync('ffmpeg', ['-version'], { encoding: 'utf8' }).error;
+  if (!hasFfmpeg) info('ffmpeg на этом компьютере не установлен — проверки настоящего ffmpeg пропущены');
+  else {
+    const real = spawnSync('ffmpeg', ['-hide_banner', '-protocol_whitelist', CAMERA_PROTOCOLS, '-i', 'file:/etc/hostname', '-f', 'null', '-'], { encoding: 'utf8' });
+    info(`настоящий ffmpeg с белым списком на file: → ${(real.stderr.match(/[^\n]*whitelist[^\n]*/) || ['?'])[0].trim().slice(0, 90)}`);
+    ok('даже если адрес пройдёт проверку, ffmpeg откажется читать файл', real.status !== 0 && /whitelist/i.test(real.stderr));
+    const net = spawnSync('ffmpeg', ['-hide_banner', '-protocol_whitelist', CAMERA_PROTOCOLS, '-rtsp_transport', 'tcp', '-i', 'rtsp://127.0.0.1:1/x', '-f', 'null', '-'], { encoding: 'utf8', timeout: 15000 });
+    ok('белый список не мешает подключаться к камерам по RTSP', !/whitelist/i.test(net.stderr), net.stderr.slice(-160));
+  }
 }
 
 {

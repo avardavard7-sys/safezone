@@ -28,7 +28,9 @@ button.ghost{background:transparent;color:var(--muted);border:1px solid var(--li
 </style></head><body>
 <header><div class="brand">Safe<span>Zone</span> Bridge</div><div id="pill" class="pill">запуск</div></header>
 <main>
-<section id="s-starting" class="screen"><div class="card center"><div class="spin"></div><h1>Запускаю…</h1><p>Подключаюсь к платформе и камерам</p></div></section>
+<section id="s-starting" class="screen"><div class="card center"><div class="spin"></div><h1>Запускаю…</h1><p id="start-text">Подключаюсь к платформе и загружаю модели распознавания. На слабом компьютере это до минуты</p></div>
+<div class="log" id="log0" style="margin-top:14px;height:170px"></div>
+<div class="row"><button id="unpairBtn0" class="ghost">Отвязать от объекта</button><p>Журнал также сохраняется в файл bridge.log в папке программы</p></div></section>
 <section id="s-unpaired" class="screen"><div class="card">
 <h1>Привязка к объекту</h1><p>Введите код, чтобы подключить этот компьютер к вашему объекту</p>
 <ol><li>Откройте панель SafeZone: <b>Бридж → «Добавить бридж»</b></li><li>Скопируйте код из 8 символов и введите его ниже</li></ol>
@@ -59,6 +61,12 @@ function render(s) {
   const [text, cls] = labels[s.phase] || [s.phase, '']; pill.textContent = text; pill.className = 'pill ' + cls;
   $('err').textContent = s.error || '';
   $('pairBtn').disabled = s.phase === 'pairing';
+  if (phase === 'starting') {
+    const l0 = $('log0'); l0.textContent = (s.logs || []).slice(-60).join('\n'); l0.scrollTop = l0.scrollHeight;
+    $('start-text').textContent = s.restarts
+      ? `Программа перезапускается (${s.restarts}). Причина — в журнале ниже`
+      : 'Подключаюсь к платформе и загружаю модели распознавания. На слабом компьютере это до минуты';
+  }
   if (phase === 'running') {
     const offline = acc && acc.state === 'offline_grace';
     $('v-link').textContent = offline ? 'нет связи' : (s.online ? 'на связи' : '…');
@@ -66,7 +74,7 @@ function render(s) {
     $('v-cams').textContent = h.cameras ?? '…';
     $('v-access').textContent = acc && acc.until ? 'до ' + fmtDate(acc.until) : 'активен';
     $('v-ver').textContent = h.version || '…';
-    $('hint').textContent = acc && acc.maxCameras != null ? 'Лимит камер: ' + acc.maxCameras : '';
+    $('hint').textContent = [acc && acc.maxCameras != null ? 'Лимит камер: ' + acc.maxCameras : '', s.safeMode ? 'Облегчённый режим: без локального детектора' : ''].filter(Boolean).join(' · ');
     const log = $('log'); const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
     log.textContent = (s.logs || []).slice(-80).join('\n'); if (stick) log.scrollTop = log.scrollHeight;
   }
@@ -79,7 +87,7 @@ function render(s) {
 $('pairBtn').onclick = () => window.bridgeApp.pair($('code').value);
 $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pairBtn').click(); });
 $('dashBtn').onclick = $('dashBtn2').onclick = () => window.bridgeApp.openDashboard();
-$('unpairBtn').onclick = () => { if (confirm('Отвязать этот компьютер от объекта? Анализ камер остановится.')) window.bridgeApp.unpair(); };
+$('unpairBtn').onclick = $('unpairBtn0').onclick = () => { if (confirm('Отвязать этот компьютер от объекта? Анализ камер остановится.')) window.bridgeApp.unpair(); };
 window.bridgeApp.onState(render);
 window.bridgeApp.getState().then(render);
 </script></body></html>

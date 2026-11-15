@@ -4,12 +4,12 @@ import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/Card';
 import { createClient } from '@/lib/supabase/client';
 import { BUSINESS_TYPES, type BusinessType } from '@/lib/business';
-import { Copy, KeyRound, RefreshCw, SlidersHorizontal, UserPlus } from 'lucide-react';
+import { Copy, KeyRound, Link2, RefreshCw, SlidersHorizontal, UserPlus } from 'lucide-react';
 import ClientFeatures from './ClientFeatures';
 import toast from 'react-hot-toast';
 
 type Client = { mall_id: string; name: string; city: string | null; business_type: BusinessType; user_id: string | null; login: string | null; full_name: string | null; site_subnets: string[] };
-type Issued = { login: string; password: string; object: string };
+type Issued = { object: string; login?: string; password?: string; code?: string; codeExpires?: string };
 
 const LOGIN_URL = typeof window !== 'undefined' ? `${window.location.origin}/login` : '/login';
 
@@ -21,6 +21,21 @@ function genPassword() {
 }
 
 const typeLabel = (t: string) => BUSINESS_TYPES.find(x => x.key === t)?.label || t;
+
+const until = (iso?: string) => iso
+  ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  : '';
+
+function buildMessage(i: Issued) {
+  const lines = [`Доступ к Aura SafeZone — ${i.object}`];
+  if (i.login) lines.push(`Вход: ${LOGIN_URL}`, `Логин: ${i.login}`, `Пароль: ${i.password}`);
+  if (i.code) {
+    lines.push('', `Код для программы SafeZone Bridge: ${i.code}`, `Действует до ${until(i.codeExpires)}.`);
+    lines.push('Установите программу на компьютер в одной сети с камерами и введите этот код.');
+  }
+  if (i.password) lines.push('', 'Пароль показан один раз — сохраните его.');
+  return lines.join('\n');
+}
 
 export default function ClientsPanel() {
   const sb = createClient();
@@ -53,9 +68,13 @@ export default function ClientsPanel() {
       p_business_type: type, p_object_name: form.object, p_city: form.city, p_address: form.address,
       p_full_name: form.fullName, p_login: form.login, p_password: form.password,
     });
+    if (error) { setBusy(false); toast.error(error.message); return; }
+    const done: Issued = { login: (data as any).login, password: form.password, object: form.object.trim() };
+    const br = await sb.rpc('dev_create_bridge', { p_mall: (data as any).mall_id, p_name: 'Бридж' });
     setBusy(false);
-    if (error) { toast.error(error.message); return; }
-    setIssued({ login: (data as any).login, password: form.password, object: form.object });
+    if (br.error) toast.error(`Доступ создан, но код бриджа не выдан: ${br.error.message}`);
+    else { done.code = (br.data as any).pairing_code; done.codeExpires = (br.data as any).code_expires; }
+    setIssued(done);
     setForm({ object: '', city: '', address: '', fullName: '', login: '', password: genPassword() });
     load();
   }
@@ -67,6 +86,12 @@ export default function ClientsPanel() {
     const { error } = await sb.rpc('dev_reset_password', { p_user: c.user_id, p_password: pwd });
     if (error) { toast.error(error.message); return; }
     setIssued({ login: c.login!, password: pwd, object: c.name });
+  }
+
+  async function bridgeCode(c: Client) {
+    const { data, error } = await sb.rpc('dev_create_bridge', { p_mall: c.mall_id, p_name: 'Бридж' });
+    if (error) { toast.error(error.message); return; }
+    setIssued({ object: c.name, code: (data as any).pairing_code, codeExpires: (data as any).code_expires });
   }
 
   async function newPosKey(c: Client) {
@@ -83,9 +108,7 @@ export default function ClientsPanel() {
     load();
   }
 
-  const message = issued
-    ? `Доступ к Aura SafeZone — ${issued.object}\nВход: ${LOGIN_URL}\nЛогин: ${issued.login}\nПароль: ${issued.password}\n\nПароль показан один раз — сохраните его.`
-    : '';
+  const message = issued ? buildMessage(issued) : '';
 
   const field = 'w-full bg-surface-200 border border-surface-300 rounded-lg px-3 py-2 text-white';
 
@@ -116,7 +139,7 @@ export default function ClientsPanel() {
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-white"><Copy size={16} /> Скопировать</button>
             <button onClick={() => setIssued(null)} className="px-4 py-2 rounded-lg bg-surface-200 text-slate-300">Готово</button>
           </div>
-          <p className="text-xs text-slate-500">Пароль нигде не хранится в открытом виде — после закрытия посмотреть его будет нельзя, только выдать новый.</p>
+          <p className="text-xs text-slate-500">Пароль нигде не хранится в открытом виде — после закрытия посмотреть его будет нельзя, только выдать новый. Код бриджа действует 24 часа, новый — кнопкой «Код бриджа» у клиента.</p>
         </Card>
       )}
 
@@ -145,7 +168,7 @@ export default function ClientsPanel() {
         </div>
         <button disabled={busy || form.object.trim().length < 2 || form.login.length < 3 || form.password.length < 8} onClick={create}
           className="px-5 py-2.5 rounded-lg bg-primary text-white disabled:opacity-40">
-          {busy ? 'Создаю…' : 'Создать объект и доступ'}
+          {busy ? 'Создаю…' : 'Создать объект, доступ и код бриджа'}
         </button>
         <p className="text-xs text-slate-500">
           Клиент получит роль администратора своего объекта: увидит камеры, инциденты, посетителей и всё, что положено его типу.
@@ -173,6 +196,9 @@ export default function ClientsPanel() {
               <button onClick={() => setOpenId(openId === c.mall_id ? null : c.mall_id)}
                 className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs ${openId === c.mall_id ? 'bg-primary text-white' : 'bg-surface-200 text-slate-300 hover:bg-surface-300'}`}>
                 <SlidersHorizontal size={13} /> Функции
+              </button>
+              <button onClick={() => bridgeCode(c)} className="flex items-center gap-1 px-3 py-1 rounded-lg bg-surface-200 text-slate-300 hover:bg-surface-300 text-xs">
+                <Link2 size={13} /> Код бриджа
               </button>
               <button onClick={() => newPosKey(c)} className="px-3 py-1 rounded-lg bg-surface-200 text-slate-300 hover:bg-surface-300 text-xs">Касса</button>
               {c.user_id && (

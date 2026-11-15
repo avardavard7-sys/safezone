@@ -36,8 +36,15 @@ const sameOrigin = (a, b) => { try { return new URL(a).origin === new URL(b).ori
 function openOutside(u) { if (isWebUrl(u)) shell.openExternal(u); }
 const ALLOWED_PERMISSIONS = new Set(['fullscreen', 'clipboard-sanitized-write', 'local-network-access', 'local-network', 'loopback-network']);
 let quitting = false, restartTimer = null, restartDelay = 5000, pollTimer = null;
+let coldCrashes = 0, warmed = false, safeMode = process.env.SZ_SAFE_MODE === '1';
+const EXIT_HINTS = {
+  3221225501: 'процессор этого компьютера не поддерживает инструкции, нужные модели распознавания',
+  3221225477: 'ошибка доступа к памяти при загрузке модели',
+  3221226505: 'аварийное завершение при загрузке модели',
+  134: 'не хватило памяти',
+};
 const logLines = [];
-const state = { phase: 'starting', error: '', health: null, online: false, logs: logLines, configured: !!(config.supabaseUrl && config.supabaseAnonKey) || !!process.env.SZ_BRIDGE_ENTRY };
+const state = { phase: 'starting', error: '', health: null, online: false, safeMode, restarts: 0, logs: logLines, configured: !!(config.supabaseUrl && config.supabaseAnonKey) || !!process.env.SZ_BRIDGE_ENTRY };
 
 const dataDir = () => app.getPath('userData');
 const stateFile = () => path.join(dataDir(), 'state.json');
@@ -50,12 +57,23 @@ function push() {
 function phaseLabel() {
   return { starting: 'запуск', unpaired: 'не привязан', pairing: 'привязка', running: 'работает', blocked: 'доступ закрыт', stopped: 'остановлен' }[state.phase] || state.phase;
 }
+let logFile = null;
+function writeLogFile(lines) {
+  try {
+    logFile = logFile || path.join(dataDir(), 'bridge.log');
+    try { if (fs.statSync(logFile).size > 2 * 1024 * 1024) fs.renameSync(logFile, logFile + '.1'); } catch {}
+    fs.appendFileSync(logFile, lines.map(l => `${new Date().toISOString()} ${l}`).join('\n') + '\n');
+  } catch {}
+}
 function addLog(text) {
+  const fresh = [];
   for (const line of String(text).split(/\r?\n/)) {
     if (!line.trim()) continue;
+    fresh.push(line.slice(0, 400));
     logLines.push(line.slice(0, 400));
     if (logLines.length > 300) logLines.shift();
   }
+  if (fresh.length) writeLogFile(fresh);
 }
 
 function startMedia() {
@@ -93,6 +111,8 @@ function startBridge(pairingCode = '') {
   state.phase = pairingCode ? 'pairing' : 'starting';
   state.error = '';
   let unpairedSeen = false, reasonNext = false, reason = '';
+  warmed = false;
+  state.safeMode = safeMode;
   let mediaEnv = {};
   if (mediaAvailable()) {
     try {
@@ -115,6 +135,7 @@ function startBridge(pairingCode = '') {
       API_ENABLED: 'true',
       API_PORT: String(API_PORT),
       API_HOST: '127.0.0.1',
+      SZ_SAFE_MODE: safeMode ? '1' : '',
       ...mediaEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -127,6 +148,7 @@ function startBridge(pairingCode = '') {
       const msg = line.replace(/^\[[^\]]+\]\s*/, '').trim();
       if (reasonNext && msg) { reason = msg; reasonNext = false; }
       if (msg.includes('Бридж не привязан')) { unpairedSeen = true; reasonNext = true; }
+      if (/прогреты|облегчённый режим|^Initial:/i.test(msg)) warmed = true;
     }
     push();
   };
@@ -146,7 +168,16 @@ function startBridge(pairingCode = '') {
       return;
     }
     state.phase = 'starting';
-    addLog(`бридж остановился (код ${code}), перезапуск через ${Math.round(restartDelay / 1000)} с`);
+    state.restarts++;
+    const hint = EXIT_HINTS[code] ? ` — ${EXIT_HINTS[code]}` : '';
+    if (!warmed && !safeMode) {
+      coldCrashes++;
+      if (coldCrashes >= 2) {
+        safeMode = true;
+        addLog('модели распознавания не запускаются на этом компьютере — включаю облегчённый режим: движение и облачные проверки, без локального детектора');
+      }
+    }
+    addLog(`бридж остановился (код ${code}${hint}), перезапуск через ${Math.round(restartDelay / 1000)} с`);
     push();
     restartTimer = setTimeout(() => startBridge(), restartDelay);
     restartDelay = Math.min(restartDelay * 2, 60000);
@@ -166,7 +197,7 @@ function pollHealth() {
     res.on('end', () => {
       try {
         const h = JSON.parse(body);
-        state.health = h; state.online = true; restartDelay = 5000;
+        state.health = h; state.online = true; restartDelay = 5000; coldCrashes = 0;
         if (child) state.phase = h.access && h.access.allowed === false ? 'blocked' : 'running';
       } catch { state.online = false; }
       push();

@@ -41,7 +41,7 @@ if (!globalThis.WebSocket) {
   globalThis.WebSocket = WebSocket;
 }
 
-const BRIDGE_VERSION = 'v7.12';
+const BRIDGE_VERSION = 'v7.15';
 
 const {
   SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, PAIRING_CODE,
@@ -535,9 +535,12 @@ const detectorHere = (name) => !!YOLOX_SIZES[name] && existsSync(new URL(`./${na
 const detectorName = detectorHere(RT.DETECTOR) ? RT.DETECTOR : DETECTOR_FALLBACK;
 if (detectorName !== RT.DETECTOR) console.log(`Детектор «${RT.DETECTOR}» недоступен, использую ${detectorName}`);
 const yx = createYolox(detectorName + '.onnx', YOLOX_SIZES[detectorName]);
-const yoloDetect = yx.detect, yoloInit = yx.init;
+const SAFE_MODE = process.env.SZ_SAFE_MODE === '1';
+const yoloDetect = SAFE_MODE ? async () => [] : yx.detect;
+const yoloInit = SAFE_MODE ? async () => {} : yx.init;
 
-const poseDetect = rtmoDetect, poseInit = rtmoInit;
+const poseDetect = SAFE_MODE ? async () => ({ persons: [] }) : rtmoDetect;
+const poseInit = SAFE_MODE ? async () => {} : rtmoInit;
 
 const GEMINI_KEYS = [GEMINI_API_KEY, GEMINI_API_KEY2, GEMINI_API_KEY3].filter(Boolean);
 let geminiKeyIdx = 0;
@@ -1889,38 +1892,6 @@ function announceStart() {
     }
   }
 
-  if (LOCAL_VLM_URL) {
-    const ping = await localVlmPing(LOCAL_VLM_URL);
-    if (ping.ok) log(`Локальный VLM жив, модели: ${ping.models.join(', ') || '(список пуст)'}`);
-    else log(`⚠️ Локальный VLM не отвечает (${ping.detail})${RT.LOCAL_ONLY ? ' — LOCAL_ONLY: анализ работать НЕ будет, подними ollama!' : ' — работаю через облако'}`);
-  }
-  if (RT.YOLO_ENABLED) {
-    const t0 = Date.now();
-    try {
-      await yoloInit();
-      await poseInit();
-      log(`Детектор (${RT.DETECTOR}) + позы (${RT.POSE_MODEL}) прогреты за ${Date.now() - t0}ms — готовы фильтровать`);
-    } catch (e) {
-      log(`⚠️ YOLO не запустился: ${e.message}. Работаю через motion-detection как раньше.`);
-    }
-  }
-  await loadSettings();
-  printBanner();
-  log(`Initial: enabled=${settings.ai_enabled} interval=${settings.ai_interval_sec}s confidence=${settings.ai_confidence}`);
-  announceStart();
-
-  // Команды из панели через Supabase — работает из облака и с телефона,
-  // без прямого соединения браузер→localhost
-  commandRunner = createCommandRunner({
-    serverMode: () => MEDIA.enabled,
-    siteSubnets: () => siteSubnets,
-    sb, mallId, log,
-    discoverCameras,
-    grabSnapshot,
-    detect: (buf) => yoloDetect(buf),
-    buildRtspUrl,
-  });
-
   // в серверном режиме через API идёт проверка прав MediaMTX — без него LIVE не откроется ни у кого
   if (API_ENABLED === 'true' || MEDIA.enabled) {
     startApi({
@@ -1949,6 +1920,39 @@ function announceStart() {
       onSettingsSaved: () => loadBridgeSettings(),
     }, { port: API_PORT, host: API_HOST });
   }
+
+  if (LOCAL_VLM_URL) {
+    const ping = await localVlmPing(LOCAL_VLM_URL);
+    if (ping.ok) log(`Локальный VLM жив, модели: ${ping.models.join(', ') || '(список пуст)'}`);
+    else log(`⚠️ Локальный VLM не отвечает (${ping.detail})${RT.LOCAL_ONLY ? ' — LOCAL_ONLY: анализ работать НЕ будет, подними ollama!' : ' — работаю через облако'}`);
+  }
+  if (SAFE_MODE) log('Облегчённый режим: локальные модели распознавания отключены на этом компьютере, работают движение и облачные проверки');
+  else if (RT.YOLO_ENABLED) {
+    const t0 = Date.now();
+    try {
+      await yoloInit();
+      await poseInit();
+      log(`Детектор (${RT.DETECTOR}) + позы (${RT.POSE_MODEL}) прогреты за ${Date.now() - t0}ms — готовы фильтровать`);
+    } catch (e) {
+      log(`⚠️ YOLO не запустился: ${e.message}. Работаю через motion-detection как раньше.`);
+    }
+  }
+  await loadSettings();
+  printBanner();
+  log(`Initial: enabled=${settings.ai_enabled} interval=${settings.ai_interval_sec}s confidence=${settings.ai_confidence}`);
+  announceStart();
+
+  // Команды из панели через Supabase — работает из облака и с телефона,
+  // без прямого соединения браузер→localhost
+  commandRunner = createCommandRunner({
+    serverMode: () => MEDIA.enabled,
+    siteSubnets: () => siteSubnets,
+    sb, mallId, log,
+    discoverCameras,
+    grabSnapshot,
+    detect: (buf) => yoloDetect(buf),
+    buildRtspUrl,
+  });
 
   loop();
   intervalRef = setInterval(loop, settings.ai_interval_sec * 1000);
