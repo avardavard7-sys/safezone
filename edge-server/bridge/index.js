@@ -27,6 +27,7 @@ import { LineCounter } from './counter.js';
 import { FrameStream } from './stream.js';
 import { planAnalyzers, tracksPayload, Throttle, watchedFromPresence } from './live.js';
 import { ShelfChange, changeEvidence, VERIFY_PROMPT, judgeVerdict } from './shelfchange.js';
+import { DrawerWatch, drawerEvidence, DRAWER_PROMPT, DRAWER_TEXT, judgeDrawer } from './drawerwatch.js';
 import { ShelfWatch } from './shelf.js';
 import { CashWatch } from './cash.js';
 import { concealmentEvidence, cashEvidence, blacklistEvidence } from './evidence.js';
@@ -44,7 +45,7 @@ if (!globalThis.WebSocket) {
   globalThis.WebSocket = WebSocket;
 }
 
-const BRIDGE_VERSION = 'v7.18';
+const BRIDGE_VERSION = 'v7.19';
 
 const {
   SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, PAIRING_CODE,
@@ -84,6 +85,7 @@ let businessType = null;
 // проходит дверь за 1–2. Поэтому камера с линией получает отдельный непрерывный
 // поток на COUNT_FPS кадров в секунду — только она, остальные не трогаем.
 const SHELF_CHANGE = process.env.SHELF_CHANGE !== '0';
+const DRAWER_WATCH = process.env.DRAWER_WATCH !== '0';
 const COUNT_FPS = Math.max(2, Math.min(10, parseInt(process.env.COUNT_FPS || '5', 10)));
 let countLines = [];
 let regions = [];
@@ -162,6 +164,26 @@ async function pollReturns() {
   }
 }
 setInterval(() => { pollReturns().catch(() => {}); }, 15000);
+
+let lastSaleId = null;
+async function pollSales() {
+  const cams = [...counting.values()].filter(c => c.cash && c.drawerWatch?.drawers.length);
+  if (!DRAWER_WATCH || !cams.length) return;
+  if (lastSaleId === null) {
+    const { data, error } = await sb.from('pos_events').select('id').order('id', { ascending: false }).limit(1);
+    if (!error) lastSaleId = data?.[0]?.id || 0;
+    return;
+  }
+  const { data, error } = await sb.from('pos_events').select('id, at').in('kind', ['sale', 'return'])
+    .gt('id', lastSaleId).order('id').limit(200);
+  if (error) return;
+  for (const r of data || []) {
+    lastSaleId = Math.max(lastSaleId, r.id);
+    const at = Date.parse(r.at);
+    if (Number.isFinite(at)) for (const c of cams) c.drawerWatch.noteSale(at);
+  }
+}
+setInterval(() => { pollSales().catch(() => {}); }, 5000);
 
 async function sendReturnAlert(c, r) {
   const sum = r.amount != null ? `${Number(r.amount).toLocaleString('ru-RU')} ₸` : 'без суммы';
@@ -280,6 +302,8 @@ function syncCounting(cams) {
       c.shelfChange.setRegions(job.shelves);
       c.cashWatch.setRegions(job.cashZones);
       c.cashWatch.setQuiet(cashQuiet);
+      c.drawerWatch.setRegions(job.cashZones);
+      c.drawerWatch.setQuiet(cashQuiet);
       c.queueWatch.setRegions(job.queueRegions);
       c.queue = job.queue;
       c.theft = job.theft;
@@ -307,6 +331,7 @@ function syncCounting(cams) {
       shelf: new ShelfWatch({ regions: job.shelves }),
       shelfChange: new ShelfChange({ regions: job.shelves }),
       cashWatch: (() => { const w = new CashWatch({ regions: job.cashZones }); w.setQuiet(cashQuiet); return w; })(),
+      drawerWatch: (() => { const w = new DrawerWatch({ regions: job.cashZones }); w.setQuiet(cashQuiet); return w; })(),
       queueWatch: new QueueWatch({ regions: job.queueRegions, alertAt: parseInt(process.env.QUEUE_ALERT_AT || '5', 10) }),
       queue: job.queue,
       cam,
@@ -353,6 +378,17 @@ async function countFrame(camId, buf, t) {
   if (c.cash) {
     for (const alert of c.cashWatch.observe(tracks, t, buf)) {
       sendCashAlert(c.cam, alert, buf, c.cashWatch.customers.map(z => z.poly)).catch(e => log(`  ⚠️ касса: ${e.message}`));
+    }
+    if (DRAWER_WATCH) {
+      try {
+        const r = await c.drawerWatch.observe(buf, tracks.filter(tr => tr.lastSeen === t), t);
+        for (const e of r.events) {
+          if (e.kind === 'open') log(`  💵 ${c.cam.name}: ящик «${e.drawer.name}» открыт`);
+          else if (e.kind === 'close') log(`  💵 ${c.cam.name}: ящик «${e.drawer.name}» закрыт, был открыт ${Math.round(e.openMs / 1000)} с`);
+          else log(`  💵 ${c.cam.name}: вид ящика «${e.drawer.name}» принят за «закрыт»`);
+        }
+        for (const a of r.alerts) sendDrawerAlert(c.cam, a, buf).catch(e => log(`  ⚠️ касса (ящик): ${e.message}`));
+      } catch (e) { log(`  ⚠️ касса (ящик): ${e.message}`); }
     }
   }
 
@@ -621,7 +657,7 @@ function applyBridgePayload(payload) {
   if (Array.isArray(payload.face_cameras)) faceCameras = new Set(payload.face_cameras);
   if (Array.isArray(payload.cash_quiet)) {
     cashQuiet = payload.cash_quiet;
-    for (const c of counting.values()) c.cashWatch?.setQuiet(cashQuiet);
+    for (const c of counting.values()) c.cashWatch?.setQuiet(cashQuiet); c.drawerWatch?.setQuiet(cashQuiet);
   }
   if (payload.report && typeof payload.report === 'object') reportCfg = payload.report;
   if (payload.blacklist_version !== undefined && payload.blacklist_version !== blacklistVersion) {
@@ -1196,6 +1232,29 @@ async function sendTakenAlert(cam, ev, frame) {
     status: 'new',
   }, log);
   if (error) log(`  ❌ полка в базу: ${error.message}`);
+}
+
+async function sendDrawerAlert(cam, alert, frame) {
+  const image = await drawerEvidence(alert, frame);
+  let verdict = null;
+  if (PLATFORM_VISION_URL && bridgeToken && !RT.LOCAL_ONLY) {
+    try { verdict = (await platformVision({ url: PLATFORM_VISION_URL, token: bridgeToken, prompt: DRAWER_PROMPT, base64: image.toString('base64') })).result; }
+    catch (e) { log(`  ⚠️ касса (облако): ${e.message}`); }
+  }
+  const j = judgeDrawer(alert, verdict);
+  if (!j.send) { log(`  💵 ${cam.name}: тревога по «${alert.drawer.name}» снята — ${j.note}`); return; }
+  const description = `Касса «${alert.drawer.name}»: ${DRAWER_TEXT[alert.kind]} (открыт ${Math.round(alert.openMs / 1000)} с). ${j.note}. Проверьте видео — это не обвинение.`;
+  log(`  💵 ${cam.name}: ${description}`);
+  try {
+    await sendTelegramPhoto(image, `💵 <b>Подозрение на кассе</b>\n${description}\n📹 ${cam.name}\n🕐 ${new Date(alert.at).toLocaleTimeString('ru-RU', { timeZone: SITE_TZ })}`);
+  } catch (e) { log(`  ⚠️ касса telegram: ${e.message}`); }
+  const { error } = await insertDroppingUnknownColumns(sb, 'events', {
+    mall_id: cam.mall_id || mallId, camera_id: cam.id, camera_name: cam.name, zone_id: cam.zone_id,
+    type: 'cash_suspicious', severity: 'high', description,
+    confidence: verdict ? Math.max(0.6, Math.min(0.95, Number(verdict.confidence) || 0.6)) : (alert.kind === 'to_body' ? 0.6 : 0.7),
+    screenshot_base64: image.toString('base64'), status: 'new',
+  }, log);
+  if (error) log(`  ❌ касса в базу: ${error.message}`);
 }
 
 async function sendZoneAlert(cam, za, jpegBuffer) {

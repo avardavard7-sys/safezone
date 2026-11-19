@@ -955,6 +955,10 @@ section('LOCAL_ONLY: статические гарантии (код index.js)')
   check('страховка LOCAL_ONLY стоит ДО обращения к платформе', platformPos > 0 && guardPos < platformPos);
   check('premium-перепроверка OpenAI выключена в LOCAL_ONLY', idx.includes('OPENAI_API_KEY && !RT.LOCAL_ONLY'));
   // булев не должен сравниваться со строкой — на этом уже обжигались (кадры уходили в облако)
+  {
+    const a = idx.indexOf('async function sendDrawerAlert'), b = idx.indexOf('platformVision(', a), g = idx.indexOf('!RT.LOCAL_ONLY', a);
+    check('касса (ящик): облако не вызывается в LOCAL_ONLY', a > 0 && g > a && g < b && b - a < 600);
+  }
   check('LOCAL_ONLY нигде не сравнивается со строкой', !/RT\.LOCAL_ONLY\s*[!=]==\s*'/.test(idx));
   check('все живые ключи читаются через RT (нет утечки .env в горячий код)',
     !/(?<![\w.])(TILED_GRID|STATIC_RECHECK_MIN|MAX_CLOUD_PER_CAM_HOUR)\s*[*<>)]/.test(idx.slice(idx.indexOf('} = process.env;'))));
