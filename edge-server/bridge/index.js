@@ -28,6 +28,7 @@ import { FrameStream } from './stream.js';
 import { planAnalyzers, tracksPayload, Throttle, watchedFromPresence } from './live.js';
 import { ShelfChange, changeEvidence, VERIFY_PROMPT, judgeVerdict } from './shelfchange.js';
 import { DrawerWatch, drawerEvidence, DRAWER_PROMPT, DRAWER_TEXT, judgeDrawer } from './drawerwatch.js';
+import { MotionCounter, CountFusion } from './motioncount.js';
 import { ShelfWatch } from './shelf.js';
 import { CashWatch } from './cash.js';
 import { concealmentEvidence, cashEvidence, blacklistEvidence } from './evidence.js';
@@ -45,7 +46,7 @@ if (!globalThis.WebSocket) {
   globalThis.WebSocket = WebSocket;
 }
 
-const BRIDGE_VERSION = 'v7.19';
+const BRIDGE_VERSION = 'v7.20';
 
 const {
   SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, PAIRING_CODE,
@@ -86,6 +87,7 @@ let businessType = null;
 // поток на COUNT_FPS кадров в секунду — только она, остальные не трогаем.
 const SHELF_CHANGE = process.env.SHELF_CHANGE !== '0';
 const DRAWER_WATCH = process.env.DRAWER_WATCH !== '0';
+const MOTION_COUNT = process.env.MOTION_COUNT !== '0';
 const COUNT_FPS = Math.max(2, Math.min(10, parseInt(process.env.COUNT_FPS || '5', 10)));
 let countLines = [];
 let regions = [];
@@ -298,6 +300,8 @@ function syncCounting(cams) {
     if (c && c.url !== url) { c.stream.stop(); counting.delete(id); c = null; }
     if (c) {
       c.counter.setLines(lines);
+      c.motion.setLines(lines);
+      c.fusion.setLines(c.motion.counter.lines);
       c.shelf.setRegions(job.shelves);
       c.shelfChange.setRegions(job.shelves);
       c.cashWatch.setRegions(job.cashZones);
@@ -323,6 +327,8 @@ function syncCounting(cams) {
       mallId: cam.mall_id || mallId,
       tracker: new CameraTracker({ ttlMs: 5000 }),
       counter: new LineCounter({ lines }),
+      motion: new MotionCounter({ lines }),
+      fusion: new CountFusion({ lines }),
       count: job.count,
       overlay: job.overlay,
       theft: job.theft,
@@ -396,10 +402,17 @@ async function countFrame(camId, buf, t) {
     overlayChannel.send({ type: 'broadcast', event: 'tracks', payload: tracksPayload(camId, tracks, t) }).catch(() => {});
   }
   if (!c.count) return;
-  for (const ev of c.counter.observe(tracks, t)) {
+  let crossings = c.counter.observe(tracks, t);
+  if (MOTION_COUNT) {
+    try {
+      c.motion.learnSize(people);
+      crossings = c.fusion.push(crossings, tracks, await c.motion.observe(buf, t, people), t);
+    } catch (e) { log(`  ⚠️ подсчёт по движению: ${e.message}`); }
+  }
+  for (const ev of crossings) {
     c.events++;
     visitorQueue.push({
-      mall_id: c.mallId, camera_id: camId, line_id: ev.lineId, track_id: ev.trackId,
+      mall_id: c.mallId, camera_id: camId, line_id: ev.lineId, track_id: ev.source === 'motion' ? -ev.trackId : ev.trackId,
       direction: ev.direction, source: 'ai', occurred_at: new Date(ev.at).toISOString(),
     });
   }
