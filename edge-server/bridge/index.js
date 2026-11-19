@@ -26,6 +26,7 @@ import { loadKey, MediaSync, internalReadUrl, localLiveSession } from './media.j
 import { LineCounter } from './counter.js';
 import { FrameStream } from './stream.js';
 import { planAnalyzers, tracksPayload, Throttle, watchedFromPresence } from './live.js';
+import { ShelfChange, changeEvidence, VERIFY_PROMPT, judgeVerdict } from './shelfchange.js';
 import { ShelfWatch } from './shelf.js';
 import { CashWatch } from './cash.js';
 import { concealmentEvidence, cashEvidence, blacklistEvidence } from './evidence.js';
@@ -43,7 +44,7 @@ if (!globalThis.WebSocket) {
   globalThis.WebSocket = WebSocket;
 }
 
-const BRIDGE_VERSION = 'v7.17';
+const BRIDGE_VERSION = 'v7.18';
 
 const {
   SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, PAIRING_CODE,
@@ -82,6 +83,7 @@ let businessType = null;
 // ПОДСЧЁТ ПОСЕТИТЕЛЕЙ: основной цикл смотрит камеру раз в 5–15 секунд, а человек
 // проходит дверь за 1–2. Поэтому камера с линией получает отдельный непрерывный
 // поток на COUNT_FPS кадров в секунду — только она, остальные не трогаем.
+const SHELF_CHANGE = process.env.SHELF_CHANGE !== '0';
 const COUNT_FPS = Math.max(2, Math.min(10, parseInt(process.env.COUNT_FPS || '5', 10)));
 let countLines = [];
 let regions = [];
@@ -275,6 +277,7 @@ function syncCounting(cams) {
     if (c) {
       c.counter.setLines(lines);
       c.shelf.setRegions(job.shelves);
+      c.shelfChange.setRegions(job.shelves);
       c.cashWatch.setRegions(job.cashZones);
       c.cashWatch.setQuiet(cashQuiet);
       c.queueWatch.setRegions(job.queueRegions);
@@ -302,6 +305,7 @@ function syncCounting(cams) {
       cash: job.cash,
       faces: job.faces,
       shelf: new ShelfWatch({ regions: job.shelves }),
+      shelfChange: new ShelfChange({ regions: job.shelves }),
       cashWatch: (() => { const w = new CashWatch({ regions: job.cashZones }); w.setQuiet(cashQuiet); return w; })(),
       queueWatch: new QueueWatch({ regions: job.queueRegions, alertAt: parseInt(process.env.QUEUE_ALERT_AT || '5', 10) }),
       queue: job.queue,
@@ -330,6 +334,15 @@ async function countFrame(camId, buf, t) {
   if (c.theft) {
     for (const alert of c.shelf.observe(tracks, t, buf)) {
       sendConcealmentAlert(c.cam, alert, buf).catch(e => log(`  ⚠️ полка: ${e.message}`));
+    }
+    if (SHELF_CHANGE) {
+      try {
+        // сумки нужны только пока следим, куда ушла рука после взятого предмета
+        const bags = c.shelfChange.following ? (await yoloDetect(buf)).filter(d => d.cls === 'backpack' || d.cls === 'handbag' || d.cls === 'suitcase') : [];
+        const r = await c.shelfChange.observe(buf, tracks, t, { bags });
+        for (const p of r.picks) { p.after = buf; log(`  🛒 ${c.cam.name}: с «${p.shelf.name}» взят предмет, человек #${p.trackId ?? '?'}`); }
+        for (const a of r.alerts) sendTakenAlert(c.cam, a, buf).catch(e => log(`  ⚠️ полка (предмет): ${e.message}`));
+      } catch (e) { log(`  ⚠️ полка (предмет): ${e.message}`); }
     }
   }
   if (c.queue) {
@@ -1155,6 +1168,36 @@ const tiledState = {};       // дальнозоркость: счётчик ц�
 let cloudBudget = new CloudBudget(RT.MAX_CLOUD_PER_CAM_HOUR);
 
 /** Тревога по зоне: Telegram + БД. Облако НЕ вызывается — правило локальное. */
+async function sendTakenAlert(cam, ev, frame) {
+  const where = ev.where === 'bag' ? 'рука ушла в сумку или рюкзак' : 'рука ушла к телу';
+  const image = await changeEvidence(ev, ev.after || frame, frame);
+  let verdict = null;
+  if (PLATFORM_VISION_URL && bridgeToken && !RT.LOCAL_ONLY) {
+    try { verdict = (await platformVision({ url: PLATFORM_VISION_URL, token: bridgeToken, prompt: VERIFY_PROMPT, base64: image.toString('base64') })).result; }
+    catch (e) { log(`  ⚠️ полка (облако): ${e.message}`); }
+  }
+  const j = judgeVerdict(verdict);
+  if (!j.send) { log(`  🛒 ${cam.name}: тревога по «${ev.shelf.name}» снята — ${j.note}`); return; }
+  const description = `С «${ev.shelf.name}» взят предмет, после этого ${where}, человек #${ev.trackId ?? '?'}. ${j.note}. Проверьте видео — это не обвинение.`;
+  log(`  🛍 ${cam.name}: ${description}`);
+  try {
+    await sendTelegramPhoto(image, `🛍 <b>Предмет взят и спрятан?</b>\n${description}\n📹 ${cam.name}\n🕐 ${new Date(ev.at).toLocaleTimeString('ru-RU', { timeZone: SITE_TZ })}`);
+  } catch (e) { log(`  ⚠️ полка telegram: ${e.message}`); }
+  const { error } = await insertDroppingUnknownColumns(sb, 'events', {
+    mall_id: cam.mall_id || mallId,
+    camera_id: cam.id,
+    camera_name: cam.name,
+    zone_id: cam.zone_id,
+    type: 'concealment',
+    severity: 'high',
+    description,
+    confidence: verdict ? Math.max(0.6, Math.min(0.95, Number(verdict.confidence) || 0.6)) : 0.6,
+    screenshot_base64: image.toString('base64'),
+    status: 'new',
+  }, log);
+  if (error) log(`  ❌ полка в базу: ${error.message}`);
+}
+
 async function sendZoneAlert(cam, za, jpegBuffer) {
   const icon = za.type === 'uncleaned_table' ? '🍽' : '🔔';
   const caption = `${icon} <b>${za.name}</b>\n${za.description}\n📹 ${cam.name}${cam.floor ? ` · этаж ${cam.floor}` : ''}\n🕐 ${localTime(SITE_TZ)}`;
