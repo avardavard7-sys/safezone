@@ -1,5 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { spawn } from 'child_process';
+import net from 'net';
+import dns from 'dns';
 import { readFile, unlink } from 'fs/promises';
 import WebSocket from 'ws';
 import 'dotenv/config';
@@ -41,7 +43,7 @@ if (!globalThis.WebSocket) {
   globalThis.WebSocket = WebSocket;
 }
 
-const BRIDGE_VERSION = 'v7.16';
+const BRIDGE_VERSION = 'v7.17';
 
 const {
   SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, PAIRING_CODE,
@@ -560,7 +562,28 @@ if (!SUPABASE_URL || (!SUPABASE_ANON_KEY && !SUPABASE_SERVICE_KEY)) {
   process.exit(1);
 }
 
+// Node 20 даёт каждому адресу сервера 250 мс на соединение; на медленной сети
+// этого не хватает и любой запрос падает с «fetch failed», хотя интернет есть
+try { net.setDefaultAutoSelectFamilyAttemptTimeout(5000); } catch {}
+try { dns.setDefaultResultOrder('ipv4first'); } catch {}
+
+async function netFetch(input, init) {
+  let last;
+  for (let i = 0; i < 3; i++) {
+    try { return await fetch(input, init); }
+    catch (e) {
+      last = e;
+      if (init?.signal?.aborted) break;
+      await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+    }
+  }
+  const c = last?.cause;
+  const why = c ? [c.code, c.message].filter(Boolean).join(' ') : '';
+  throw new Error(`нет связи с платформой${why ? ': ' + why : ''}`, { cause: last });
+}
+
 const sb = createClient(SUPABASE_URL, LEGACY_MODE ? SUPABASE_SERVICE_KEY : SUPABASE_ANON_KEY, {
+  global: { fetch: netFetch },
   auth: { persistSession: false, autoRefreshToken: true },
   realtime: { transport: WebSocket },
 });
@@ -1212,7 +1235,7 @@ async function processCamera(cam) {
   const wants = (...keys) => keys.some(k => featureAllows(k) && (!enabledSc || enabledSc.has(k)));
   const PEOPLE_SCENARIOS = ['theft', 'fight', 'smoking', 'fall', 'crowd', 'child_lost', 'suspicious', 'intrusion', 'weapon'];
 
-  if (RT.YOLO_ENABLED) {
+  if (RT.YOLO_ENABLED && !SAFE_MODE) {
     const now = Date.now();
     const afterHrs = isAfterHours();
     const recentSuspicion = suspicionUntil[cam.id] && now < suspicionUntil[cam.id];
@@ -1772,8 +1795,9 @@ async function sendHeartbeat() {
       cycles: runtime.cycles,
       cameras: runtime.cameras,
       alerts: runtime.alerts,
-      detector: RT.DETECTOR,
-      pose: RT.POSE_MODEL,
+      detector: SAFE_MODE ? 'нет (облако по движению)' : RT.DETECTOR,
+      pose: SAFE_MODE ? 'нет' : RT.POSE_MODEL,
+      safe_mode: SAFE_MODE,
       zones: zoneEngine ? zoneEngine.rules.length : 0,
       counting: [...counting.values()].map(c => ({ name: c.name, count: c.count, overlay: c.overlay, frames: c.stream.frames, dropped: c.stream.dropped, events: c.events })),
       watched: watched.size,
@@ -1840,7 +1864,7 @@ const loop = singleFlight(loopOnce, {
 
 function printBanner() {
   log(`=== SafeZone Bridge ${BRIDGE_VERSION} — PAIRED (привязка по коду, зоны и настройки из панели) ===`);
-  log(`Детектор: ${RT.YOLO_ENABLED ? '✓ ' + RT.DETECTOR + ' | Позы: ' + RT.POSE_MODEL + ' — на этом компьютере (бесплатно, без интернета)' : '✗ выключен'}`);
+  log(`Детектор: ${SAFE_MODE ? '✗ на этом компьютере не запускается — кадры с движением проверяет облако' : RT.YOLO_ENABLED ? '✓ ' + RT.DETECTOR + ' | Позы: ' + RT.POSE_MODEL + ' — на этом компьютере (бесплатно, без интернета)' : '✗ выключен'}`);
   log(`Трекер: ${RT.LOCAL_TRACKER ? '✓ ID/скорости/лойтеринг/брошенные вещи локально' : '✗'} | Burst: ${RT.BURST_ENABLED ? `✓ ${RT.BURST_FRAMES} кадров @ ${RT.BURST_FPS} fps при тревоге` : '✗'}`);
   log(`Облако (только при детекте): OpenRouter ${OPENROUTER_API_KEY ? '✓ ' + OPENROUTER_MODEL : '✗'} | Gemini ×${GEMINI_KEYS.length} | Groq ${GROQ_API_KEY ? '✓' : '✗'} | OpenAI ${OPENAI_API_KEY ? '✓' : '✗'}`);
   log(`Дальнозоркость: ${RT.TILED_DETECT !== 'off' ? `✓ тайлы ${RT.TILED_GRID}x${RT.TILED_GRID} (${RT.TILED_DETECT}) — люди до ~${RT.TILED_GRID === 3 ? 37 : 48}px` : '✗'}`);
@@ -1877,8 +1901,13 @@ function announceStart() {
         log,
       });
       bridgeToken = state.token;
+      if (state.mall_id) mallId = state.mall_id;
       applyBridgePayload(payload);
     } catch (e) {
+      if (!PAIRING_CODE && /нет связи с платформой|fetch failed/i.test(e.message || '')) {
+        log(`Привязка сохранена, но ${e.message}. Повторю попытку`);
+        process.exit(75);
+      }
       log('');
       log('✗ Бридж не привязан к объекту.');
       log(`  ${e.message}`);
@@ -1947,7 +1976,7 @@ function announceStart() {
   commandRunner = createCommandRunner({
     serverMode: () => MEDIA.enabled && process.env.SZ_ON_SITE !== '1',
     siteSubnets: () => siteSubnets,
-    sb, mallId, log,
+    sb, mallId: () => mallId, log,
     discoverCameras,
     grabSnapshot,
     detect: (buf) => yoloDetect(buf),

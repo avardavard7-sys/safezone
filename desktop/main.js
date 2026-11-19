@@ -113,6 +113,7 @@ function startBridge(pairingCode = '') {
   state.error = '';
   let unpairedSeen = false, reasonNext = false, reason = '';
   warmed = false;
+  if (!safeMode) { try { safeMode = fs.existsSync(path.join(dataDir(), 'safe-mode.json')); } catch {} }
   state.safeMode = safeMode;
   let mediaEnv = {};
   if (mediaAvailable()) {
@@ -176,10 +177,11 @@ function startBridge(pairingCode = '') {
     lastExit = String(code);
     lastTail = logLines.slice(-12).join('\n').replace(/rtsp:\/\/[^@\s]*@/g, 'rtsp://***@').slice(-1500);
     const hint = EXIT_HINTS[code] ? ` — ${EXIT_HINTS[code]}` : '';
-    if (!warmed && !safeMode) {
+    if (!warmed && !safeMode && code !== 75) {
       coldCrashes++;
       if (coldCrashes >= 2) {
         safeMode = true;
+        try { fs.writeFileSync(path.join(dataDir(), 'safe-mode.json'), JSON.stringify({ since: new Date().toISOString() })); } catch {}
         addLog('модели распознавания не запускаются на этом компьютере — включаю облегчённый режим: движение и облачные проверки, без локального детектора');
       }
     }
@@ -257,7 +259,6 @@ ipcMain.handle('open-dashboard', () => { openDashboard(); return true; });
 ipcMain.handle('pair', (_e, code) => {
   const clean = String(code || '').trim().toUpperCase();
   if (!/^[A-Z0-9]{8}$/.test(clean)) { state.error = 'Код состоит из 8 букв и цифр'; push(); return false; }
-  for (const f of ['state.json', 'access.json']) { try { fs.unlinkSync(path.join(dataDir(), f)); } catch {} }
   startBridge(clean);
   return true;
 });

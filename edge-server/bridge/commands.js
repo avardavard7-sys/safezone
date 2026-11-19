@@ -22,7 +22,8 @@ const MAX_RUNTIME_MS = 420000; // страховка: зависшая кома�
  * @param {object} deps { sb, mallId, log, discoverCameras, grabSnapshot, detect, buildRtspUrl }
  */
 export function createCommandRunner(deps) {
-  const { sb, mallId, log } = deps;
+  const { sb, log } = deps;
+  const getMall = () => (typeof deps.mallId === 'function' ? deps.mallId() : deps.mallId);
   let busy = false;
   let tableMissing = false;
 
@@ -95,6 +96,7 @@ export function createCommandRunner(deps) {
 
   /** Забирает одну команду и выполняет. Вызывается из основного цикла бриджа. */
   async function tick() {
+    const mallId = getMall();
     if (busy || tableMissing || !mallId) return;
     busy = true;
     try {
