@@ -1235,7 +1235,7 @@ async function processCamera(cam) {
   const wants = (...keys) => keys.some(k => featureAllows(k) && (!enabledSc || enabledSc.has(k)));
   const PEOPLE_SCENARIOS = ['theft', 'fight', 'smoking', 'fall', 'crowd', 'child_lost', 'suspicious', 'intrusion', 'weapon'];
 
-  if (RT.YOLO_ENABLED) {
+  if (RT.YOLO_ENABLED && !SAFE_MODE) {
     const now = Date.now();
     const afterHrs = isAfterHours();
     const recentSuspicion = suspicionUntil[cam.id] && now < suspicionUntil[cam.id];
@@ -1795,8 +1795,9 @@ async function sendHeartbeat() {
       cycles: runtime.cycles,
       cameras: runtime.cameras,
       alerts: runtime.alerts,
-      detector: RT.DETECTOR,
-      pose: RT.POSE_MODEL,
+      detector: SAFE_MODE ? 'нет (облако по движению)' : RT.DETECTOR,
+      pose: SAFE_MODE ? 'нет' : RT.POSE_MODEL,
+      safe_mode: SAFE_MODE,
       zones: zoneEngine ? zoneEngine.rules.length : 0,
       counting: [...counting.values()].map(c => ({ name: c.name, count: c.count, overlay: c.overlay, frames: c.stream.frames, dropped: c.stream.dropped, events: c.events })),
       watched: watched.size,
@@ -1863,7 +1864,7 @@ const loop = singleFlight(loopOnce, {
 
 function printBanner() {
   log(`=== SafeZone Bridge ${BRIDGE_VERSION} — PAIRED (привязка по коду, зоны и настройки из панели) ===`);
-  log(`Детектор: ${RT.YOLO_ENABLED ? '✓ ' + RT.DETECTOR + ' | Позы: ' + RT.POSE_MODEL + ' — на этом компьютере (бесплатно, без интернета)' : '✗ выключен'}`);
+  log(`Детектор: ${SAFE_MODE ? '✗ на этом компьютере не запускается — кадры с движением проверяет облако' : RT.YOLO_ENABLED ? '✓ ' + RT.DETECTOR + ' | Позы: ' + RT.POSE_MODEL + ' — на этом компьютере (бесплатно, без интернета)' : '✗ выключен'}`);
   log(`Трекер: ${RT.LOCAL_TRACKER ? '✓ ID/скорости/лойтеринг/брошенные вещи локально' : '✗'} | Burst: ${RT.BURST_ENABLED ? `✓ ${RT.BURST_FRAMES} кадров @ ${RT.BURST_FPS} fps при тревоге` : '✗'}`);
   log(`Облако (только при детекте): OpenRouter ${OPENROUTER_API_KEY ? '✓ ' + OPENROUTER_MODEL : '✗'} | Gemini ×${GEMINI_KEYS.length} | Groq ${GROQ_API_KEY ? '✓' : '✗'} | OpenAI ${OPENAI_API_KEY ? '✓' : '✗'}`);
   log(`Дальнозоркость: ${RT.TILED_DETECT !== 'off' ? `✓ тайлы ${RT.TILED_GRID}x${RT.TILED_GRID} (${RT.TILED_DETECT}) — люди до ~${RT.TILED_GRID === 3 ? 37 : 48}px` : '✗'}`);
