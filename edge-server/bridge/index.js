@@ -1,5 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { spawn } from 'child_process';
+import net from 'net';
+import dns from 'dns';
 import { readFile, unlink } from 'fs/promises';
 import WebSocket from 'ws';
 import 'dotenv/config';
@@ -41,7 +43,7 @@ if (!globalThis.WebSocket) {
   globalThis.WebSocket = WebSocket;
 }
 
-const BRIDGE_VERSION = 'v7.16';
+const BRIDGE_VERSION = 'v7.17';
 
 const {
   SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, PAIRING_CODE,
@@ -560,7 +562,28 @@ if (!SUPABASE_URL || (!SUPABASE_ANON_KEY && !SUPABASE_SERVICE_KEY)) {
   process.exit(1);
 }
 
+// Node 20 даёт каждому адресу сервера 250 мс на соединение; на медленной сети
+// этого не хватает и любой запрос падает с «fetch failed», хотя интернет есть
+try { net.setDefaultAutoSelectFamilyAttemptTimeout(5000); } catch {}
+try { dns.setDefaultResultOrder('ipv4first'); } catch {}
+
+async function netFetch(input, init) {
+  let last;
+  for (let i = 0; i < 3; i++) {
+    try { return await fetch(input, init); }
+    catch (e) {
+      last = e;
+      if (init?.signal?.aborted) break;
+      await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+    }
+  }
+  const c = last?.cause;
+  const why = c ? [c.code, c.message].filter(Boolean).join(' ') : '';
+  throw new Error(`нет связи с платформой${why ? ': ' + why : ''}`, { cause: last });
+}
+
 const sb = createClient(SUPABASE_URL, LEGACY_MODE ? SUPABASE_SERVICE_KEY : SUPABASE_ANON_KEY, {
+  global: { fetch: netFetch },
   auth: { persistSession: false, autoRefreshToken: true },
   realtime: { transport: WebSocket },
 });
@@ -1880,6 +1903,10 @@ function announceStart() {
       if (state.mall_id) mallId = state.mall_id;
       applyBridgePayload(payload);
     } catch (e) {
+      if (!PAIRING_CODE && /нет связи с платформой|fetch failed/i.test(e.message || '')) {
+        log(`Привязка сохранена, но ${e.message}. Повторю попытку`);
+        process.exit(75);
+      }
       log('');
       log('✗ Бридж не привязан к объекту.');
       log(`  ${e.message}`);
