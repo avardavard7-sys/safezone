@@ -1877,6 +1877,7 @@ function announceStart() {
         log,
       });
       bridgeToken = state.token;
+      if (state.mall_id) mallId = state.mall_id;
       applyBridgePayload(payload);
     } catch (e) {
       log('');
@@ -1947,7 +1948,7 @@ function announceStart() {
   commandRunner = createCommandRunner({
     serverMode: () => MEDIA.enabled && process.env.SZ_ON_SITE !== '1',
     siteSubnets: () => siteSubnets,
-    sb, mallId, log,
+    sb, mallId: () => mallId, log,
     discoverCameras,
     grabSnapshot,
     detect: (buf) => yoloDetect(buf),
