@@ -108,7 +108,10 @@ export async function ensureSession({ sb, version, platform, pairingCode, log = 
   }
 
   await signIn(sb, state.email, state.password);
-  const payload = await heartbeat(sb, state.token, { boot: true, platform });
+  const boot = { boot: true, platform, version };
+  if (process.env.SZ_SAFE_MODE === '1') boot.safe_mode = true;
+  if (process.env.SZ_LAST_EXIT) { boot.last_exit = process.env.SZ_LAST_EXIT; boot.last_log = process.env.SZ_LAST_LOG || ''; }
+  const payload = await heartbeat(sb, state.token, boot);
   if (payload.mall_id && payload.mall_id !== state.mall_id) {
     state = saveState({ ...state, mall_id: payload.mall_id });
   }

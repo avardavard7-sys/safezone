@@ -41,7 +41,7 @@ if (!globalThis.WebSocket) {
   globalThis.WebSocket = WebSocket;
 }
 
-const BRIDGE_VERSION = 'v7.15';
+const BRIDGE_VERSION = 'v7.16';
 
 const {
   SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, PAIRING_CODE,
