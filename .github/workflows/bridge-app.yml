@@ -20,8 +20,17 @@ jobs:
           ONNXRUNTIME_NODE_INSTALL_CUDA: skip
         run: npm ci --omit=dev
 
+      - name: Проверка на необъявленные переменные
+        shell: bash
+        env:
+          ESLINT_USE_FLAT_CONFIG: 'false'
+        run: |
+          cd edge-server/bridge && npx --yes eslint@8.57.1 --no-eslintrc -c undef-check.json --ext .js .
+          cd ../../desktop && npx --yes eslint@8.57.1 --no-eslintrc -c undef-check.json main.js preload.js media.js
+
       - name: Тесты бриджа на Windows
         working-directory: edge-server/bridge
+        shell: bash
         run: |
           node test-access.mjs
           node test-counter.mjs
@@ -29,6 +38,10 @@ jobs:
           node test-security.mjs
           node test-camguard.mjs
           node test-cloud.mjs
+          node test-shelfchange.mjs
+          node test-drawer.mjs
+          node test-motioncount.mjs
+          node test-boot.mjs
 
       - name: ffmpeg (сборка LGPL)
         shell: pwsh
