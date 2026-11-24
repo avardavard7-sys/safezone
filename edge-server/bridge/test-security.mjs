@@ -92,10 +92,15 @@ console.log('\nПароли камер в журналах и ответах');
   const dir = mkdtempSync(join(tmpdir(), 'sz-sec-'));
   const fake = join(dir, 'ffmpeg-fake.sh');
   writeFileSync(fake, '#!/bin/sh\nfor a in "$@"; do case "$a" in rtsp*) echo "[rtsp @ 0x1] $a: Connection refused" >&2;; esac; done\nexit 1\n'); chmodSync(fake, 0o755);
-  let msg = '';
-  try { await grabSnapshot('rtsp://admin:Secr3t!@10.0.0.5:554/cam/realmonitor?channel=1', 'cam1', { bin: fake }); } catch (e) { msg = e.message; }
-  info(`ffmpeg напечатал адрес с паролем, бридж записал: ${msg.slice(0, 90)}`);
-  ok('ошибка снимка не содержит пароль камеры', msg && !msg.includes('Secr3t') && msg.includes('***@'));
+  // подменный ffmpeg — shell-скрипт; Windows его не запускает, а само скрытие пароля проверено выше
+  if (process.platform === 'win32') {
+    info('Windows: проверка с подменным ffmpeg пропущена (скрытие пароля проверено выше)');
+  } else {
+    let msg = '';
+    try { await grabSnapshot('rtsp://admin:Secr3t!@10.0.0.5:554/cam/realmonitor?channel=1', 'cam1', { bin: fake }); } catch (e) { msg = e.message; }
+    info(`ffmpeg напечатал адрес с паролем, бридж записал: ${msg.slice(0, 90)}`);
+    ok('ошибка снимка не содержит пароль камеры', msg && !msg.includes('Secr3t') && msg.includes('***@'));
+  }
   let bad = '';
   try { await grabSnapshot('file:///etc/passwd', 'cam1', { bin: fake }); } catch (e) { bad = e.message; }
   ok('снимок по не-RTSP адресу даже не запускает ffmpeg', /rtsp:\/\//.test(bad));
