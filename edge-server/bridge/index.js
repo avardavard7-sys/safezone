@@ -46,7 +46,7 @@ if (!globalThis.WebSocket) {
   globalThis.WebSocket = WebSocket;
 }
 
-const BRIDGE_VERSION = 'v7.20';
+const BRIDGE_VERSION = 'v7.21';
 
 const {
   SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, PAIRING_CODE,
@@ -670,7 +670,10 @@ function applyBridgePayload(payload) {
   if (Array.isArray(payload.face_cameras)) faceCameras = new Set(payload.face_cameras);
   if (Array.isArray(payload.cash_quiet)) {
     cashQuiet = payload.cash_quiet;
-    for (const c of counting.values()) c.cashWatch?.setQuiet(cashQuiet); c.drawerWatch?.setQuiet(cashQuiet);
+    for (const c of counting.values()) {
+      c.cashWatch?.setQuiet(cashQuiet);
+      c.drawerWatch?.setQuiet(cashQuiet);
+    }
   }
   if (payload.report && typeof payload.report === 'object') reportCfg = payload.report;
   if (payload.blacklist_version !== undefined && payload.blacklist_version !== blacklistVersion) {
@@ -1350,6 +1353,10 @@ async function processCamera(cam) {
   const wants = (...keys) => keys.some(k => featureAllows(k) && (!enabledSc || enabledSc.has(k)));
   const PEOPLE_SCENARIOS = ['theft', 'fight', 'smoking', 'fall', 'crowd', 'child_lost', 'suspicious', 'intrusion', 'weapon'];
 
+  // пункты регламента нужны и вызову облака ниже, поэтому объявлены здесь, а не внутри ветки детектора
+  let dueChecks = [];
+  let promptChecks = compliance.hintsFor(cam.id, dueChecks);
+
   if (RT.YOLO_ENABLED && !SAFE_MODE) {
     const now = Date.now();
     const afterHrs = isAfterHours();
@@ -1475,11 +1482,11 @@ async function processCamera(cam) {
 
       // 📋 РЕГЛАМЕНТ: пункты со своей периодичностью (раз в 30/60 минут).
       // Отдельный повод, независимый от сценариев безопасности.
-      const dueChecks = compliance.dueSnapshots(cam.id);
+      dueChecks = compliance.dueSnapshots(cam.id);
       if (!reason && dueChecks.length) {
         reason = `📋 Регламент: ${dueChecks.map(c => c.code).join(', ')}`;
       }
-      const promptChecks = compliance.hintsFor(cam.id, dueChecks);
+      promptChecks = compliance.hintsFor(cam.id, dueChecks);
 
       if (!reason) {
         const scSkipped = enabledSc && (danger.length || possibleFire || actFall || actFight || actSmoke || persons > 0);
